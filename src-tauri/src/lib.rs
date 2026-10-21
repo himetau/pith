@@ -384,6 +384,30 @@ pub fn run() {
             let size = win.inner_size()?.to_logical::<f64>(win.scale_factor()?);
             let main = win.add_child(WebviewBuilder::new("main", WebviewUrl::App("index.html".into())).auto_resize(), LogicalPosition::new(0.0, 0.0), size)?;
             let _ = main.with_webview(|pv| webviews::native_refresh(&pv.inner()));
+            if let Ok(gw) = win.gtk_window() { webviews::pace_frame_clock(&gw); }
+            // PITH_FRAME_LOG=1: logs gtk's frame clock once a second (it keeps the clock ticking to measure it).
+            // webkit hands a frame back only after gtk paints it, so this is the real ceiling on fps
+            if std::env::var_os("PITH_FRAME_LOG").is_some() {
+                if let Ok(gw) = win.gtk_window() {
+                    use gtk::prelude::*;
+                    let n = std::rc::Rc::new(std::cell::Cell::new((0u32, 0i64)));
+                    // it redraws every tick: gtk only gets real timings back from the compositor for frames it commits
+                    gw.add_tick_callback(move |w, clock| {
+                        w.queue_draw();
+                        let (count, since) = n.get();
+                        let now = clock.frame_time();
+                        if since == 0 { n.set((0, now)); return gtk::glib::ControlFlow::Continue; }
+                        if now - since >= 1_000_000 {
+                            let (interval, _) = clock.refresh_info(now);
+                            let timings = clock.current_timings().and_then(|t| t.refresh_interval()).map(|v| v.get() as i64).unwrap_or(-1);
+                            let mon = w.window().and_then(|gw| w.display().monitor_at_window(&gw)).map(|m| format!("{:?} {}mHz", m.model(), m.refresh_rate())).unwrap_or_else(|| "none".into());
+                            eprintln!("frame clock: {} fps, refresh interval {}us, last timings {}us, on monitor {}", count + 1, interval, timings, mon);
+                            n.set((0, now));
+                        } else { n.set((count + 1, since)); }
+                        gtk::glib::ControlFlow::Continue
+                    });
+                }
+            }
 
             let ht = h.clone();
             watch_dir(sys::config_dir(), |f| f == "colors.css", move || { let _ = ht.emit("theme", sys::read_theme()); });

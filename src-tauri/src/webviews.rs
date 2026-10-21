@@ -146,6 +146,35 @@ pub fn native_refresh(view: &webkit2gtk::WebView) {
     }
 }
 
+// gtk3 paces its frame clock off the previous frame's timings, and only fills those in for frames it commits itself.
+// webkit paints through gl, which gtk3 swaps without asking wayland for the frame callback, so refresh_interval stays
+// 0 and the clock falls back to its built-in 16667us: every frame of the app capped at 60fps on a 180hz monitor.
+// after each paint this fills the interval in from the monitor the window is on, if gtk left it empty.
+// GdkFrameTimings is private, so the field is found by offset and checked against the public getter before writing;
+// if gtk ever moves it they won't agree and this does nothing
+pub fn pace_frame_clock(win: &gtk::ApplicationWindow) {
+    use gtk::prelude::*;
+    use gtk::glib::translate::ToGlibPtr;
+    const REFRESH_INTERVAL_OFFSET: usize = 56; // ref_count + pad, then frame_counter, cookie, frame_time, smoothed_frame_time, drawn_time, presentation_time
+    let hook = |w: &gtk::ApplicationWindow| {
+        let Some(clock) = w.frame_clock() else { return };
+        let w = w.clone();
+        clock.connect_after_paint(move |clock| {
+            let Some(t) = clock.current_timings() else { return };
+            if t.refresh_interval().is_some() { return; }
+            let Some(mhz) = w.window().and_then(|gw| w.display().monitor_at_window(&gw)).map(|m| m.refresh_rate()).filter(|r| *r > 0) else { return };
+            unsafe {
+                let p: *mut gtk::gdk::ffi::GdkFrameTimings = t.to_glib_none().0;
+                let field = (p as *mut u8).add(REFRESH_INTERVAL_OFFSET) as *mut i64;
+                if *field != 0 { return; } // the getter said empty, so the offset has to read 0 too
+                *field = 1_000_000_000 / mhz as i64;
+                if t.refresh_interval().map(|v| v.get() as i64) != Some(*field) { *field = 0; } // wrong field: put it back
+            }
+        });
+    };
+    if win.frame_clock().is_some() { hook(win); } else { win.connect_realize(move |w| hook(w)); }
+}
+
 fn place(wv: &Webview, x: f64, y: f64, w: f64, h: f64) {
     let _ = wv.with_webview(move |pv| {
         use gtk::prelude::*;
