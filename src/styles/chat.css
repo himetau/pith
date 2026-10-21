@@ -33,27 +33,33 @@
 .prose > :first-child { margin-top: 0; }
 .prose > :last-child { margin-bottom: 0; }
 .prose p { margin: .55em 0; }
-.prose h1, .prose h2, .prose h3, .prose h4 { margin: 1.1em 0 .4em; line-height: 1.3; font-weight: 700; }
-.prose h1 { font-size: 1.25em; } .prose h2 { font-size: 1.12em; } .prose h3 { font-size: 1.02em; } .prose h4 { font-size: 1em; color: var(--mid); }
-.prose h1::before, .prose h2::before, .prose h3::before { color: var(--dim); font-weight: 400; margin-right: .5ch; }
+.prose h1, .prose h2, .prose h3, .prose h4 { margin: 1.1em 0 .4em; line-height: 1.3; font-weight: 700; color: var(--md-head); }
+.prose h1 { font-size: 1.25em; } .prose h2 { font-size: 1.12em; } .prose h3 { font-size: 1.02em; } .prose h4 { font-size: 1em; }
+.prose h1::before, .prose h2::before, .prose h3::before { color: color-mix(in srgb, var(--md-head) 45%, transparent); font-weight: 400; margin-right: .5ch; }
 .prose h1::before { content: "#"; } .prose h2::before { content: "##"; } .prose h3::before { content: "###"; }
 .prose ul, .prose ol { padding-left: 2.2ch; margin: .45em 0; }
 .prose li { margin: .18em 0; }
-.prose li::marker { color: var(--dim); }
+.prose li::marker { color: var(--md-mark); }
 .prose ul > li { list-style: none; position: relative; }
-.prose ul > li::before { content: "–"; position: absolute; left: -2ch; color: var(--dim); }
+.prose ul > li::before { content: "–"; position: absolute; left: -2ch; color: var(--md-mark); }
 .prose blockquote { margin: .6em 0; padding: 0 0 0 12px; border-left: 2px solid var(--line); color: var(--mid); }
 .prose a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 .prose hr { border: 0; border-top: 1px dashed var(--line); margin: 1.2em 0; }
-.prose strong { color: var(--text); font-weight: 700; }
-.prose em { color: var(--mid); }
-.prose code { font-family: var(--mono); font-size: .92em; padding: 1px 5px; border-radius: 4px; background: var(--high); }
+.prose strong { color: var(--md-strong); font-weight: 700; }
+.prose em { color: var(--md-em); }
+.prose code { font-family: var(--mono); font-size: .92em; color: var(--md-code); }
+.prose a code, .prose th code { color: inherit; }
 .prose code.path { color: var(--cyan); background: color-mix(in srgb, var(--cyan) 9%, transparent); cursor: pointer; }
 .prose code.path:hover { text-decoration: underline; text-underline-offset: 3px; }
 .prose table { border-collapse: collapse; margin: .7em 0; font-size: .92em; display: block; overflow-x: auto; }
 .prose th, .prose td { padding: 4px 12px 4px 0; border-bottom: 1px solid var(--rule); text-align: left; vertical-align: top; }
 .prose th { color: var(--mid); font-weight: 400; border-bottom-color: var(--line); }
 .prose img { max-width: 100%; border-radius: 5px; }
+/* thinking and summaries stay quiet, the colours only hint there */
+.think-body, .prose.dim {
+  --md-head: color-mix(in srgb, var(--magenta) 50%, var(--dim)); --md-strong: color-mix(in srgb, var(--orange) 50%, var(--dim));
+  --md-em: color-mix(in srgb, var(--gold) 50%, var(--dim)); --md-code: color-mix(in srgb, var(--green) 50%, var(--dim)); --md-mark: color-mix(in srgb, var(--blue) 50%, var(--dim));
+}
 .code { margin: .7em 0; border: 1px solid var(--line); border-radius: var(--r2); overflow: hidden; background: var(--surface-low); }
 .code-bar { display: flex; gap: 10px; align-items: center; padding: 2px 6px 2px 12px; font-size: .78em; color: var(--dim); border-bottom: 1px solid var(--rule); }
 .code-bar span { flex: 1; }

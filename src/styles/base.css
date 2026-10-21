@@ -25,6 +25,12 @@
   --mid: var(--on-surface-variant);
   --dim: var(--outline);
   --accent: var(--primary);
+  /* markdown in replies gets coloured like opencode does it, off the theme's accents so it follows the wallpaper */
+  --md-head: var(--magenta);
+  --md-strong: var(--orange);
+  --md-em: var(--gold);
+  --md-code: var(--green);
+  --md-mark: var(--blue);
   --win-on: color-mix(in srgb, var(--on-surface) 80%, var(--outline-variant));
   --hover: color-mix(in srgb, var(--on-surface) 6%, transparent);
   --sel: color-mix(in srgb, var(--primary) 16%, transparent);
@@ -44,9 +50,9 @@ body {
 button, input, textarea, select { font: inherit; color: inherit; }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { opacity: .45; cursor: default; }
-input, textarea { outline: none; }
+input, textarea, input:focus-visible, textarea:focus-visible { outline: none; }
 ::selection { background: color-mix(in srgb, var(--primary) 38%, transparent); }
-:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
+button:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
 ::placeholder { color: var(--dim); opacity: .8; }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 

@@ -75,8 +75,59 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
     set_loading(&l, true);
     REQUESTED.lock().unwrap().get_or_insert_with(HashMap::new).insert(l.clone(), url.into());
     let wv = win.add_child(b, LogicalPosition::new(-20000.0, 0.0), LogicalSize::new(1100.0, 760.0)).map_err(|e| e.to_string())?;
+    let _ = wv.set_auto_resize(false);
     let _ = wv.hide();
+    // tauri's window.add_child packs into a vertical GtkBox on linux, which splits the window vertically
+    // and ignores set_position/set_size. move the widget into a GtkOverlay over the main webview instead
+    let _ = wv.with_webview(move |pv| {
+        use gtk::prelude::*;
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        if !is_web {
+            if let Some(s) = WebViewExt::settings(&pv.inner()) {
+                s.set_allow_file_access_from_file_urls(true);
+                s.set_allow_universal_access_from_file_urls(true);
+            }
+        }
+        let widget: gtk::Widget = pv.inner().clone().upcast();
+        let Some(parent) = widget.parent() else { return };
+        if let Some(vbox) = parent.downcast_ref::<gtk::Box>() {
+            let children = vbox.children();
+            let overlay = if let Some(ov) = children.iter().find_map(|c| c.downcast_ref::<gtk::Overlay>().cloned()) {
+                ov
+            } else if let Some(first) = children.first().cloned() {
+                vbox.remove(&first);
+                let ov = gtk::Overlay::new();
+                ov.add(&first);
+                ov.connect_get_child_position(|_, w| {
+                    let x = unsafe { *w.data::<i32>("pith-x").map(|p| p.as_ref()).unwrap_or(&0) };
+                    let y = unsafe { *w.data::<i32>("pith-y").map(|p| p.as_ref()).unwrap_or(&0) };
+                    let width = unsafe { *w.data::<i32>("pith-w").map(|p| p.as_ref()).unwrap_or(&1) };
+                    let height = unsafe { *w.data::<i32>("pith-h").map(|p| p.as_ref()).unwrap_or(&1) };
+                    Some(gtk::gdk::Rectangle::new(x, y, width, height))
+                });
+                ov.show();
+                vbox.pack_start(&ov, true, true, 0);
+                ov
+            } else { return };
+            vbox.remove(&widget);
+            overlay.add_overlay(&widget);
+        }
+    });
     Ok(wv)
+}
+
+fn place(wv: &Webview, x: f64, y: f64, w: f64, h: f64) {
+    let _ = wv.with_webview(move |pv| {
+        use gtk::prelude::*;
+        let widget: gtk::Widget = pv.inner().clone().upcast();
+        unsafe {
+            widget.set_data("pith-x", x.round() as i32);
+            widget.set_data("pith-y", y.round() as i32);
+            widget.set_data("pith-w", w.round().max(1.0) as i32);
+            widget.set_data("pith-h", h.round().max(1.0) as i32);
+        }
+        widget.queue_resize();
+    });
 }
 
 #[derive(Deserialize)]
@@ -98,8 +149,7 @@ pub fn layout(app: &AppHandle, slots: Vec<Slot>, home: &str) -> Result<(), Strin
                 if let Ok(parsed) = u.parse::<Url>() { set_loading(&l, true); let _ = wv.navigate(parsed); }
             }
         }
-        let _ = wv.set_position(LogicalPosition::new(s.x, s.y));
-        let _ = wv.set_size(LogicalSize::new(s.w.max(1.0), s.h.max(1.0)));
+        place(&wv, s.x, s.y, s.w, s.h);
         let _ = wv.show();
         keep.push(l);
     }
@@ -128,13 +178,15 @@ pub async fn eval_json(app: &AppHandle, label: &str, body: &str) -> Result<Value
     use rand::Rng;
     let wv = app.get_webview(label).ok_or_else(|| format!("no webview {label}"))?;
     let id: String = rand::rng().sample_iter(rand::distr::Alphanumeric).take(12).map(char::from).collect();
-    let run = format!(r#"(() => {{ const box = (window.__pithEval ||= {{}}); const k = "{id}";
-      (async () => {{ {body}
-      }})().then((v) => {{ box[k] = JSON.stringify({{ ok: true, v: v === undefined ? null : v }}); }},
-                 (e) => {{ box[k] = JSON.stringify({{ ok: false, e: String((e && e.message) || e) }}); }});
+    let run = format!(r#"(() => {{ const box = (window.__pithEval ||= {{}}); box["_{id}"] = 1; const k = "{id}";
+      try {{
+        (async () => {{ {body}
+        }})().then((v) => {{ box[k] = JSON.stringify({{ ok: true, v: v === undefined ? null : v }}); }},
+                   (e) => {{ box[k] = JSON.stringify({{ ok: false, e: String((e && e.message) || e) }}); }});
+      }} catch (e) {{ box[k] = JSON.stringify({{ ok: false, e: String((e && e.message) || e) }}); }}
       return 1; }})()"#);
     wv.eval(run).map_err(|e| e.to_string())?;
-    let take = format!(r#"(() => {{ const box = window.__pithEval || {{}}; const r = box["{id}"]; if (r !== undefined) delete box["{id}"]; return r === undefined ? null : r; }})()"#);
+    let take = format!(r#"(() => {{ const box = window.__pithEval || {{}}; if (!box["_{id}"]) return "noparse"; const r = box["{id}"]; if (r !== undefined) {{ delete box["{id}"]; delete box["_{id}"]; }} return r === undefined ? null : r; }})()"#);
     let end = Instant::now() + Duration::from_secs(40);
     loop {
         let (tx, rx) = tokio::sync::oneshot::channel::<String>();
@@ -143,6 +195,7 @@ pub async fn eval_json(app: &AppHandle, label: &str, body: &str) -> Result<Value
         let raw = tokio::time::timeout(Duration::from_secs(5), rx).await.ok().and_then(|r| r.ok()).unwrap_or_default();
         // the callback gets the json of what the expression returned: our json string, or null
         if let Ok(Value::String(inner)) = serde_json::from_str::<Value>(&raw) {
+            if inner == "noparse" { return Err("script failed to parse".into()); }
             let out: Value = serde_json::from_str(&inner).map_err(|e| e.to_string())?;
             return if out["ok"] == true { Ok(out["v"].clone()) } else { Err(out["e"].as_str().unwrap_or("script failed").to_string()) };
         }

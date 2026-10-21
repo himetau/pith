@@ -98,6 +98,9 @@ export class ChatView {
   private drawLive() {
     const t = this.tab;
     if (t.status === "starting") return swap(this.live, h("span", { "data-spin": "" }), " starting pi");
+    if (t.watch) return swap(this.live, t.agentRunning
+      ? [h("span.run-spin", { "data-spin": "" }), h("span.run-word", "subagent working"), h("span.dim", "·  live from its session")]
+      : h("span.dim", "a subagent's finished run  ·  type to carry on with it"));
     if (t.status === "dead") return swap(this.live, h("span.bad", "pi stopped"), t.error ? h("pre.dead-err", t.error.slice(-1500)) : null, h("button.mini", { onclick: () => void t.ensure() }, "start again"));
     if (t.compacting) return swap(this.live, h("span", { "data-spin": "" }), " compacting context");
     if (t.retry) return swap(this.live, h("span.warn", { "data-spin": "" }), ` retry ${t.retry.attempt}/${t.retry.max} · `, h("span.dim", t.retry.error.slice(0, 120)));

@@ -3,7 +3,7 @@ import { act } from "./actions";
 import { app } from "./app";
 import { api, type WebSlot } from "./lib/api";
 import { h, swap } from "./lib/dom";
-import { ago, base, bytes, cost, dur, tilde, tokens } from "./lib/fmt";
+import { ago, base, bytes, cost, tilde, tokens } from "./lib/fmt";
 import { icon } from "./lib/icons";
 import { highlight, langOf } from "./lib/md";
 import { onTab, type Tab } from "./tab";
@@ -84,7 +84,8 @@ class Browser {
     if (r.width < 4 || r.height < 4) return null;
     const first = !this.made.has(t.id);
     this.made.add(t.id);
-    return { kind: "web", tab: t.id, url: first ? t.browserUrl || app.settings.browserHome : undefined, x: r.left, y: r.top, w: r.width, h: r.height };
+    // inset by 2px at the bottom so the native webview doesn't square off the rounded window border
+    return { kind: "web", tab: t.id, url: first ? t.browserUrl || app.settings.browserHome : undefined, x: r.left, y: r.top, w: r.width, h: r.height - 2 };
   }
 
   drop(t: Tab) { this.made.delete(t.id); }
@@ -167,7 +168,7 @@ class Preview {
     const pad = vp.w ? 14 : 0;
     const w = vp.w ? Math.min(vp.w, r.width - pad * 2) : r.width;
     const url = p.url ?? `file://${encodeURI(p.path!)}`;
-    return { kind: "pv", tab: t.id, url, x: r.left + (r.width - w) / 2, y: r.top + pad, w, h: r.height - pad * 2 };
+    return { kind: "pv", tab: t.id, url, x: r.left + (r.width - w) / 2, y: r.top + pad, w, h: r.height - pad * 2 - (vp.w ? 0 : 2) };
   }
 
   drop(t: Tab) { this.watched.delete(t.id); void api.unwatchPreview(t.id); }
@@ -305,28 +306,73 @@ class Files {
 
 // ---------- agents (live) ----------
 export let hub: any = null;
+const RUNNING = ["spawning", "thinking", "tool", "streaming"];
+// finished runs drop out of the list. failures hang around this long so you notice them
+const FAILED_FOR = 15 * 60_000;
+const agentKey = (a: any) => `${a.id}:${a.startedAt}`;
+
 class Agents {
   el = h("div.pane.agents");
   private list = h("div.ag-list");
-  private openIds = new Set<number>();
+  private openIds = new Set<string>();
+  private dismissed = new Set<string>(loadJson("pith.agents.dismissed", []));
+
   constructor() {
     this.el.append(h("div.pbar", h("span", "subagents"), h("span.grow"), h("button.btn.sm.ghost", { onclick: () => app.show("agents") }, "library")), this.list);
-    void api.agentHub().then((s) => { hub = s; this.draw(); });
-    api.on("agents:hub", (s) => { hub = s; this.draw(); app.emit("tabs"); });
+    const got = (s: any) => { hub = s; this.syncTabs(); this.draw(); app.emit("tabs"); };
+    void api.agentHub().then(got);
+    api.on("agents:hub", got);
+    // failures age out on their own, not only when the hub changes
+    setInterval(() => { if (this.el.classList.contains("on")) this.draw(); }, 60_000);
   }
+
+  // what the pane shows: running, and failures that are recent and not dismissed. a kill by the user isn't a failure
+  private shown(): any[] {
+    const now = Date.now();
+    return (hub?.agents ?? []).filter((a: any) => RUNNING.includes(a.status) ||
+      ((a.status === "failed" || a.status === "aborted") && a.errorMessage !== "Killed by user" && now - (a.endedAt || a.startedAt) < FAILED_FOR && !this.dismissed.has(agentKey(a))))
+      .sort((a: any, b: any) => b.startedAt - a.startedAt);
+  }
+
+  // tabs watching a subagent's session follow it: running or not, and a fresh read when they're on screen
+  private syncTabs() {
+    for (const t of app.tabs.values()) {
+      if (!t.watch) continue;
+      const a = (hub?.agents ?? []).find((x: any) => x.sessionFile === t.file);
+      const run = !!a && RUNNING.includes(a.status);
+      if (run !== t.agentRunning) { t.agentRunning = run; t.emit("status"); }
+      if (t === app.active && app.view === "chat") void t.peek();
+    }
+  }
+
+  private dismiss(a: any) {
+    this.dismissed.add(agentKey(a));
+    const live = new Set((hub?.agents ?? []).map(agentKey));
+    for (const k of this.dismissed) if (!live.has(k)) this.dismissed.delete(k);
+    try { localStorage.setItem("pith.agents.dismissed", JSON.stringify([...this.dismissed])); } catch { /* storage off */ }
+    this.draw();
+  }
+
   draw() {
-    const agents: any[] = (hub?.agents ?? []).slice().sort((a: any, b: any) => b.startedAt - a.startedAt);
-    if (!agents.length) return swap(this.list, h("div.pane-empty", h("div", h("div.pe-t", "no agents yet"), h("div.dim", "when pi uses the subagent tool, or /summon, they show up here live"))));
+    const agents = this.shown();
+    if (!agents.length) return swap(this.list, h("div.pane-empty", h("div", h("div.pe-t", "nothing running"), h("div.dim", "when pi uses the subagent tool, or /summon, they show up here live. finished ones drop off, failures stay a while"))));
     swap(this.list, agents.map((a) => {
-      const run = ["spawning", "thinking", "tool", "streaming"].includes(a.status);
-      const open = this.openIds.has(a.id);
-      return h(`div.ag${run ? ".run" : ""}${a.status === "failed" ? ".bad" : ""}`,
-        h("div.ag-head", { onclick: () => { if (open) this.openIds.delete(a.id); else this.openIds.add(a.id); this.draw(); } },
-          run ? h("span.ac-spin", { "data-spin": "" }) : h(`span.ac-dot${a.status === "failed" ? ".bad" : ""}`),
-          h("span.ac-name", a.agent), h("span.ag-st", a.status), h("span.grow"),
-          h("span.dim", run ? h("span", { "data-since": String(a.startedAt) }) : a.endedAt ? dur(a.endedAt - a.startedAt) : ago(a.startedAt))),
+      const run = RUNNING.includes(a.status);
+      const key = agentKey(a);
+      const open = this.openIds.has(key);
+      const toggle = (e: Event) => { e.stopPropagation(); if (open) this.openIds.delete(key); else this.openIds.add(key); this.draw(); };
+      const view = () => a.sessionFile ? app.openAgent({ sessionFile: a.sessionFile, cwd: a.cwd, agent: a.agent, task: a.task, running: run }) : toggle(new Event("x"));
+      return h(`div.ag${run ? ".run" : ".bad"}`,
+        h("div.ag-head", { onclick: view, title: a.sessionFile ? "open its session" : "" },
+          run ? h("span.ac-spin", { "data-spin": "" }) : h("span.ac-dot.bad"),
+          h("span.ac-name", a.agent), h("span.ag-st", a.status === "spawning" && a.retries ? "continuing" : a.status),
+          a.retries ? h("span.tagx", { title: "auto-continued after it failed" }, `↻ ${a.retries}`) : null,
+          h("span.grow"),
+          h("span.dim", run ? h("span", { "data-since": String(a.startedAt) }) : ago(a.endedAt || a.startedAt)),
+          h("button.mini", { title: open ? "less" : "timeline", onclick: toggle }, icon(open ? "down" : "chevron")),
+          run ? null : h("button.mini", { title: "dismiss", onclick: (e: Event) => { e.stopPropagation(); this.dismiss(a); } }, icon("close"))),
         h("div.ag-task", a.task),
-        run && a.currentActivity ? h("div.ac-now", h("span.dim", "› "), a.currentActivity) : null,
+        a.currentActivity ? h("div.ac-now", h("span.dim", "› "), a.currentActivity) : null,
         h("div.ag-meta", `${a.usage?.turns ?? 0} turns · ${tokens((a.usage?.input ?? 0) + (a.usage?.output ?? 0))} tok · ${cost(a.usage?.cost ?? 0)}${a.model ? ` · ${a.model}` : ""}${a.pid ? ` · pid ${a.pid}` : ""}`),
         open ? h("div.ag-more",
           (a.timeline ?? []).slice(-30).map((e: any) => h(`div.ag-ev.${e.type}`, h("span.dim", new Date(e.timestamp).toLocaleTimeString()), " ", e.summary)),
@@ -335,7 +381,12 @@ class Agents {
       );
     }));
   }
-  runningCount() { return (hub?.agents ?? []).filter((a: any) => ["spawning", "thinking", "tool", "streaming"].includes(a.status)).length; }
+
+  runningCount() { return (hub?.agents ?? []).filter((a: any) => RUNNING.includes(a.status)).length; }
+}
+
+function loadJson<T>(k: string, def: T): T {
+  try { return JSON.parse(localStorage.getItem(k) ?? "") as T; } catch { return def; }
 }
 
 // ---------- terminal ----------

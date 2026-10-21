@@ -41,7 +41,7 @@ export class StatusLine {
       return;
     }
     if (!this.branch.has(t.cwd)) { this.branch.set(t.cwd, ""); void this.loadBranch(t.cwd); }
-    const word = t.status === "running" ? (t.compacting ? "compact" : "work") : t.status === "starting" ? "start" : t.status === "dead" ? "dead" : t.status === "cold" ? "cold" : t.asks.length ? "wait" : "idle";
+    const word = t.watch ? (t.agentRunning ? "work" : "agent") : t.status === "running" ? (t.compacting ? "compact" : "work") : t.status === "starting" ? "start" : t.status === "dead" ? "dead" : t.status === "cold" ? "cold" : t.asks.length ? "wait" : "idle";
     const st = t.stats;
     const cu = st?.contextUsage;
     const pct = cu?.percent ?? 0;

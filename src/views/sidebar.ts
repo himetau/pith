@@ -51,7 +51,7 @@ export class Sidebar {
       const key = t.file ?? t.id;
       const prev = rows.get(key);
       const hasItems = t.items.some((i) => i.k === "user");
-      rows.set(key, { file: t.file, tab: t, title: hasItems || t.name || t.state.sessionName ? t.title : prev?.title ?? t.title, cwd: t.cwd, updated: Math.max(prev?.updated ?? 0, t.lastUsed) });
+      rows.set(key, { file: t.file, tab: t, title: hasItems || t.name || t.state.sessionName ? t.title : prev?.title ?? t.title, cwd: t.cwd, updated: prev ? Math.max(prev.updated, t.sent) : t.sent || t.lastUsed });
     }
     return [...rows.values()];
   }

@@ -189,6 +189,8 @@ fn agents_save(def: Value, cwd: Option<String>, scope: Option<String>) -> String
 #[tauri::command]
 fn agents_hub() -> Value { sys::read_agent_hub() }
 #[tauri::command]
+fn agents_session(file: String) -> Value { sys::agent_session(&file) }
+#[tauri::command]
 fn images_list() -> Vec<Value> { sys::list_images() }
 
 #[derive(Deserialize)]
@@ -303,6 +305,7 @@ fn dev_control(app: AppHandle, dir: PathBuf) {
     let d2 = dir.clone();
     let mut w = notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
         let Ok(ev) = ev else { return };
+        if !matches!(ev.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_)) { return };
         for p in ev.paths {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             if !name.ends_with(".cmd.json") { continue; }
@@ -315,11 +318,21 @@ fn dev_control(app: AppHandle, dir: PathBuf) {
                 if let (Some(w), Some(s)) = (app.get_window("main"), cmd["size"].as_array()) {
                     let _ = w.set_size(LogicalSize::new(s[0].as_f64().unwrap_or(1480.0), s[1].as_f64().unwrap_or(940.0)));
                 }
-                let res = match cmd["js"].as_str() {
-                    Some(js) => match tauri::async_runtime::block_on(webviews::eval_json(&app, "main", &format!("return await ({js}\n)"))) {
+                let res = if let Some(js) = cmd["js"].as_str() {
+                    match tauri::async_runtime::block_on(async {
+                        match webviews::eval_json(&app, "main", &format!("return await ({js}\n)")).await {
+                            Ok(v) => Ok(v),
+                            Err(_) => webviews::eval_json(&app, "main", js).await,
+                        }
+                    }) {
                         Ok(v) => json!({ "ok": true, "value": v }), Err(e) => json!({ "ok": false, "error": e }),
-                    },
-                    None => json!({ "ok": true }),
+                    }
+                } else if let Some(shot) = cmd["shot"].as_str() {
+                    match tauri::async_runtime::block_on(webviews::snapshot(&app, "main")).and_then(|png| std::fs::write(shot, png).map_err(err)) {
+                        Ok(()) => json!({ "ok": true }), Err(e) => json!({ "ok": false, "error": e }),
+                    }
+                } else {
+                    json!({ "ok": true })
                 };
                 let _ = std::fs::write(&out, res.to_string());
             });
@@ -333,7 +346,10 @@ fn watch_dir(dir: PathBuf, test: impl Fn(&str) -> bool + Send + 'static, fire: i
     use notify::Watcher;
     let _ = std::fs::create_dir_all(&dir);
     if let Ok(mut w) = notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
-        if let Ok(ev) = ev { if ev.paths.iter().any(|p| p.file_name().is_some_and(|n| test(&n.to_string_lossy()))) { fire(); } }
+        let Ok(ev) = ev else { return };
+        // fire() reads the file it's watching, so an Access event here loops into itself
+        if !matches!(ev.kind, notify::EventKind::Create(_) | notify::EventKind::Modify(_)) { return; }
+        if ev.paths.iter().any(|p| p.file_name().is_some_and(|n| test(&n.to_string_lossy()))) { fire(); }
     }) {
         if w.watch(&dir, notify::RecursiveMode::NonRecursive).is_ok() { std::mem::forget(w); }
     }
@@ -350,8 +366,9 @@ pub fn run() {
         .setup(|app| {
             let h = app.handle().clone();
             // pi and the shell read the extension and prompts off disk. bundled builds carry them as resources,
-            // a dev build reads the repo
-            let bundled = app.path().resource_dir().ok().filter(|d| d.join("ext/pith-bridge.ts").exists());
+            // the launcher's copy (scripts/install-desktop.sh) keeps them next to the binary, a dev build reads the repo
+            let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
+            let bundled = [app.path().resource_dir().ok(), exe_dir].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists());
             let _ = RES.set(bundled.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")));
             let hb = h.clone();
             let _ = BRIDGE.set(bridge::start(move |tab, op, args| bridge_call(&hb, tab, op, args)));
@@ -374,7 +391,7 @@ pub fn run() {
             pi_start, pi_cmd, pi_ui, pi_stop, pi_mode, pi_live,
             sessions_list, sessions_trash, meta_all, meta_set, usage_get, settings_get, settings_set, sys_info,
             git_status, git_diff, git_branch, fs_list, fs_read, fs_write, fs_exists, fs_pick_dir, fs_pick_files,
-            preview_watch, preview_unwatch, agents_defs, agents_save, agents_hub, images_list, images_generate,
+            preview_watch, preview_unwatch, agents_defs, agents_save, agents_hub, agents_session, images_list, images_generate,
             open_external, open_path, open_reveal, clip_write, clip_image, notify, win_focused, win_minimize, win_maximize, win_close,
             term_open, term_write, term_resize, term_close,
             web_layout, web_navigate, web_go, web_url, web_eval, web_close,

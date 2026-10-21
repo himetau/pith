@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ctl.py js '<code>' | shot <file.png> [w h]
-# sends one command to the app started by tauri-run.sh (or the electron build with PITH_CTL) and prints the answer
+# sends one command to the app started by tauri-run.sh and prints the answer
 import json, os, sys, time, uuid
 d = os.path.join(os.environ.get("PITH_DEV_DIR", "/tmp/pith-dev"), "ctl")
 cid = uuid.uuid4().hex[:8]

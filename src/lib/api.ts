@@ -54,6 +54,7 @@ export type Api = {
   agentDefs: Fn<[cwd?: string], AgentDef[]>;
   saveAgent: Fn<[def: Partial<AgentDef>, cwd?: string, scope?: string], string>;
   agentHub: Fn<[], any>;
+  agentSession: Fn<[file: string], { entries: any[]; leafId: string | null }>;
   images: Fn<[], { file: string; mtime: number; prompt: string }[]>;
   generateImage: Fn<[prompt: string, inputs?: { data: string; mimeType: string }[]], { files: string[]; images: { data: string; mimeType: string }[]; text: string }>;
   openExternal: Fn<[url: string], void>;
@@ -98,7 +99,7 @@ export const api: Api = {
   listFiles: call("fs_list", ["cwd"]), read: call("fs_read", ["path"]), write: call("fs_write", ["path", "text"]), exists: call("fs_exists", ["path"]),
   pickDir: call("fs_pick_dir", ["def"]), pickFiles: call("fs_pick_files"),
   watchPreview: call("preview_watch", ["tab", "path"]), unwatchPreview: call("preview_unwatch", ["tab"]),
-  agentDefs: call("agents_defs", ["cwd"]), saveAgent: call("agents_save", ["def", "cwd", "scope"]), agentHub: call("agents_hub"),
+  agentDefs: call("agents_defs", ["cwd"]), saveAgent: call("agents_save", ["def", "cwd", "scope"]), agentHub: call("agents_hub"), agentSession: call("agents_session", ["file"]),
   images: call("images_list"), generateImage: call("images_generate", ["prompt", "inputs"]),
   openExternal: call("open_external", ["url"]), openPath: call("open_path", ["path"]), reveal: call("open_reveal", ["path"]),
   copy: call("clip_write", ["text"]), copyImage: call("clip_image", ["data"]), notify: call("notify", ["title", "body"]), focused: call("win_focused"),
@@ -107,7 +108,7 @@ export const api: Api = {
   webUrl: call("web_url", ["kind", "tab"]), webEval: call("web_eval", ["kind", "tab", "js"]), webClose: call("web_close", ["tab"]),
   minimize: call("win_minimize"), maximize: call("win_maximize"), close: call("win_close"),
   fileSrc: (p) => convertFileSrc(p),
-  // events carry their arguments as an array, same order the electron build sent them in
+  // events carry their arguments as an array, same order the views were written against
   on(ch, fn) {
     const off = listen<unknown>(ch, (e) => (Array.isArray(e.payload) ? fn(...e.payload) : fn(e.payload)));
     return () => { void off.then((u) => u()); };

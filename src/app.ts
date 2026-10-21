@@ -1,5 +1,6 @@
 // App-wide state: open sessions, which view is up, settings, the session list from disk
 import { api, type Mode, type Model, type SessionInfo, type Settings, type SysInfo } from "./lib/api";
+import { titleFrom } from "./lib/fmt";
 import { Tab } from "./tab";
 
 export type View = "home" | "chat" | "usage" | "settings" | "agents" | "images";
@@ -39,7 +40,23 @@ export const app = {
     this.view = "chat";
     this.emit("view");
     this.emit("tabs");
-    if (t.status === "cold") void t.ensure().then(() => this.trim());
+    if (t.watch) void t.peek();
+    else if (t.status === "cold") void t.ensure().then(() => this.trim());
+  },
+
+  // a subagent's run, opened as its own tab you can watch, and carry on in once it's done
+  openAgent(a: { sessionFile: string; cwd: string; agent: string; task: string; running: boolean }) {
+    let t = [...this.tabs.values()].find((x) => x.file === a.sessionFile);
+    if (!t) {
+      t = new Tab(a.cwd, a.sessionFile, "chat", this.settings.mode, `${a.agent} · ${titleFrom(a.task)}`);
+      t.watch = true;
+      t.agentRunning = a.running;
+      // keep whatever side pane you opened it from, usually the agents list
+      t.pane = this.active?.pane ?? null;
+      this.add(t);
+    }
+    this.focus(t);
+    return t;
   },
 
   // open a session file, reusing its tab when it's already open

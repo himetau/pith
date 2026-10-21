@@ -234,10 +234,23 @@ pub fn read_agent_hub() -> Value {
         for a in agents {
             let running = matches!(a.get("status").and_then(|s| s.as_str()), Some("spawning" | "thinking" | "tool" | "streaming"));
             let pid = a.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
-            if running && (pid == 0 || !alive(pid)) { a["status"] = json!("aborted"); }
+            // no pid while spawning is normal, and it's how auto-continue waits between attempts
+            let spawning = a.get("status").and_then(|s| s.as_str()) == Some("spawning");
+            if running && if pid == 0 { !spawning } else { !alive(pid) } { a["status"] = json!("aborted"); }
         }
     }
     hub
+}
+
+// a subagent's session straight off disk, shaped like pi's get_entries, since its own process owns it while it runs
+pub fn agent_session(file: &str) -> Value {
+    let bytes = fs::read(file).unwrap_or_default();
+    let entries: Vec<Value> = String::from_utf8_lossy(&bytes).lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|e| e.get("type").and_then(|t| t.as_str()) != Some("session") && e.get("id").is_some())
+        .collect();
+    let leaf = entries.last().and_then(|e| e.get("id")).cloned().unwrap_or(Value::Null);
+    json!({ "entries": entries, "leafId": leaf })
 }
 
 // ---------- images ----------

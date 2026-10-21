@@ -49,17 +49,26 @@ export class Tab {
   retry: { attempt: number; max: number; until: number; error: string } | null = null;
   runStart = 0;
   lastUsed = Date.now();
+  // when you last sent something, which is what orders the sidebar. a new session counts from when it was made
+  sent = 0;
   preview: { path?: string; url?: string; title?: string } | null = null;
   browserUrl = "";
   pane: string | null = null;
   draft = "";
+  // a subagent's session: read off disk while its own process runs it, a normal session once you type in it
+  watch = false;
+  agentRunning = false;
+  private peeking: Promise<void> | null = null;
+  private peekAgain = false;
   private tools = new Map<string, ToolBlock>();
   // what the user typed for a /template, shown instead of the expansion pi echoes back
   private typed: string[] = [];
   private live: ItemOf<"assistant"> | null = null;
   private loaded = false;
 
-  constructor(public cwd: string, public file: string | undefined, public kind: "chat" | "design", public mode: Mode, public name?: string) {}
+  constructor(public cwd: string, public file: string | undefined, public kind: "chat" | "design", public mode: Mode, public name?: string) {
+    if (!file) this.sent = Date.now();
+  }
 
   get title() {
     if (this.state.sessionName || this.name) return (this.state.sessionName || this.name)!;
@@ -81,6 +90,7 @@ export class Tab {
   async ensure(): Promise<boolean> {
     this.lastUsed = Date.now();
     if (this.status === "idle" || this.status === "running") return true;
+    if (this.watch && this.agentRunning) { this.note("info", "this agent is still running in its own process. once it's done you can carry on here"); return false; }
     if (this.status === "starting") {
       await new Promise<void>((r) => { const off = onTab((t, w) => { if (t === this && w === "status" && this.status !== "starting") { off(); r(); } }); });
       return (this.status as Status) === "idle" || (this.status as Status) === "running";
@@ -100,7 +110,8 @@ export class Tab {
     this.file = this.state.sessionFile ?? this.file;
     this.saveMeta();
     // history goes in before anyone can send, a load landing after a live message would wipe it
-    if (resuming && !this.loaded) await this.load();
+    if (resuming && (!this.loaded || this.watch)) await this.load();
+    this.watch = false;
     this.loaded = true;
     this.status = this.state.isStreaming ? "running" : "idle";
     this.emit("status");
@@ -128,11 +139,29 @@ export class Tab {
   // entries, not messages: messages stop at the last compaction, entries keep everything on the branch
   async load() {
     const r = await this.cmd({ type: "get_entries" });
-    if (!r.success) return;
+    if (r.success) this.fill(r.data.entries, r.data.leafId);
+  }
+
+  // re-reads a watched session; calls that land mid-read get folded into one more read after it
+  peek(): Promise<void> {
+    if (!this.watch || !this.file) return Promise.resolve();
+    if (this.peeking) { this.peekAgain = true; return this.peeking; }
+    this.peeking = (async () => {
+      do {
+        this.peekAgain = false;
+        const d = await api.agentSession(this.file!).catch(() => null);
+        if (d && this.watch) this.fill(d.entries, d.leafId);
+      } while (this.peekAgain);
+      this.peeking = null;
+    })();
+    return this.peeking;
+  }
+
+  private fill(entries: any[], leafId: string | null) {
     const byId = new Map<string, any>();
-    for (const e of r.data.entries) byId.set(e.id, e);
+    for (const e of entries) byId.set(e.id, e);
     const path: any[] = [];
-    for (let id = r.data.leafId; id && byId.has(id); id = byId.get(id).parentId) path.push(byId.get(id));
+    for (let id = leafId; id && byId.has(id); id = byId.get(id).parentId) path.push(byId.get(id));
     path.reverse();
     this.items = [];
     this.tools.clear();
@@ -143,6 +172,8 @@ export class Tab {
       else if (e.type === "branch_summary") this.push<ItemOf<"branch">>({ k: "branch", summary: e.summary });
       else if (e.type === "custom_message" && e.display) this.push<ItemOf<"custom">>({ k: "custom", type: e.customType, text: textOf(e.content) });
     }
+    // off disk there's no tool_execution_end to wait for, a call without a result is still going
+    if (this.watch && this.agentRunning) for (const tb of this.tools.values()) if (!tb.result) tb.status = "running";
     this.loaded = true;
     this.emit("items");
   }
@@ -423,7 +454,7 @@ export class Tab {
   // ---------- actions ----------
   async send(text: string, images: Img[] = [], how: "auto" | "steer" | "followUp" = "auto") {
     if (!(await this.ensure())) return;
-    this.lastUsed = Date.now();
+    this.lastUsed = this.sent = Date.now();
     const imgs = images.map((i) => ({ type: "image", data: i.data, mimeType: i.mimeType }));
     const base = { message: text, ...(imgs.length ? { images: imgs } : {}) };
     const isTemplate = text.startsWith("/") && !this.commands.some((c) => c.source === "extension" && text.slice(1).split(/\s/)[0] === c.name);

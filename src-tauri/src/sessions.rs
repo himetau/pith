@@ -69,7 +69,8 @@ fn parse(file: &PathBuf, size: u64, mtime: f64) -> Parsed {
         info.usage.input += row.2; info.usage.output += row.3; info.usage.cache_read += row.4; info.usage.cache_write += row.5; info.usage.cost += row.6;
         spend.push(row);
     };
-    let Ok(text) = fs::read_to_string(file) else { return Parsed { info, spend, size, mtime } };
+    let Ok(bytes) = fs::read(file) else { return Parsed { info, spend, size, mtime } };
+    let text = String::from_utf8_lossy(&bytes);
     for line in text.lines() {
         if line.is_empty() { continue; }
         let Ok(e) = serde_json::from_str::<Value>(line) else { continue };
