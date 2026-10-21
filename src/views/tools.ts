@@ -156,7 +156,7 @@ function describe(tb: ToolBlock, tab: Tab): Kind {
       const todos: { content: string; status: string }[] = a.todos ?? [];
       const done = todos.filter((t) => t.status === "completed").length;
       const cur = todos.find((t) => t.status === "in_progress");
-      return { verb: "tasks", cls: "t-todo", target: h("span", `${done}/${todos.length}`, cur ? h("span.dim", ` · ${one(cur.content, 80)}`) : null), body: () => todoList(todos) };
+      return { verb: "tasks", cls: "t-todo", target: h("span", `${done}/${todos.length}`, cur ? h("span.dim", ` · ${one(cur.content, 80)}`) : null), body: () => todoList(todos, tab) };
     }
     case "report_findings":
       return { verb: "review", cls: "t-review", target: h("span", `${(a.findings ?? []).length} findings`), auto: true, body: () => findingsCard(tab, a) };
@@ -172,8 +172,44 @@ function describe(tb: ToolBlock, tab: Tab): Kind {
   }
 }
 
-export function todoList(todos: { content: string; status: string }[]) {
-  return h("ul.todos", todos.map((t) => h(`li.todo.${t.status}`, h("span.tbox", t.status === "completed" ? icon("check") : t.status === "in_progress" ? h("span", { "data-spin": "" }) : ""), h("span.tt", t.content))));
+export function todoList(todos: { content: string; status: string }[], tab?: Tab) {
+  const runs = tab ? agentRunsIn(tab) : [];
+  return h("ul.todos", todos.map((t) => {
+    const open = runs.length ? agentForTodo(t.content, runs) : null;
+    return h(`li.todo.${t.status}`, h("span.tbox", t.status === "completed" ? icon("check") : t.status === "in_progress" ? h("span", { "data-spin": "" }) : ""),
+      open ? h("span.tt.link", { title: "open the agent's session", onclick: (e: Event) => { e.stopPropagation(); open(); } }, t.content) : h("span.tt", t.content));
+  }));
+}
+
+// every subagent run this session started, newest last
+function agentRunsIn(tab: Tab): { task: string; agent?: string; sessionFile?: string; hubId?: number }[] {
+  const out: { task: string; agent?: string; sessionFile?: string; hubId?: number }[] = [];
+  for (const it of tab.items) {
+    if (it.k !== "assistant") continue;
+    for (const b of it.blocks) {
+      if (b?.t !== "tool" || (b.name !== "subagent" && b.name !== "summon_agent")) continue;
+      const results: any[] = (b.result ?? b.partial)?.details?.results ?? [];
+      const planned: any[] = b.args?.tasks ?? b.args?.chain ?? (b.args?.agent ? [{ agent: b.args.agent, task: b.args.task }] : []);
+      for (const r of results.length ? results : planned) if (r?.task) out.push({ task: r.task, agent: r.agent, sessionFile: r.sessionFile, hubId: r.hubId });
+    }
+  }
+  return out;
+}
+
+// a todo and a delegated task are the same work when most of the todo's words are in the task. no match, no link
+const words = (s: string) => new Set(s.toLowerCase().match(/[a-z0-9_.\/-]{3,}/g) ?? []);
+function agentForTodo(todo: string, runs: { task: string; agent?: string; sessionFile?: string; hubId?: number }[]) {
+  const tw = words(todo);
+  if (!tw.size) return null;
+  let best: (typeof runs)[number] | null = null, score = 0;
+  for (const r of runs) {
+    const rw = words(r.task);
+    let hit = 0;
+    for (const w of tw) if (rw.has(w)) hit++;
+    const s = hit / tw.size;
+    if (s >= score) { best = r; score = s; }
+  }
+  return best && score >= 0.6 ? act.agentRun(best) : null;
 }
 
 function findingsCard(tab: Tab, a: any) {
@@ -210,8 +246,9 @@ function agentsKind(tb: ToolBlock, a: any): Kind {
       const failed = r.exitCode > 0 || r.stopReason === "error" || r.stopReason === "aborted";
       const done = !running || (r.exitCode != null && r.exitCode >= 0 && (final || failed));
       const u = r.usage;
+      const open = act.agentRun({ sessionFile: r.sessionFile, hubId: r.hubId, task: r.task ?? planned[i]?.task, agent: r.agent ?? planned[i]?.agent });
       return h(`div.agent-card${failed ? ".bad" : ""}`,
-        h("div.ac-head", done ? h(`span.ac-dot${failed ? ".bad" : ""}`) : h("span.ac-spin", { "data-spin": "" }), h("span.ac-name", r.agent ?? planned[i]?.agent), h("span.ac-task", one(r.task ?? planned[i]?.task ?? "", 100)),
+        h(`div.ac-head${open ? ".link" : ""}`, { title: open ? "open its session" : "", onclick: (e: Event) => { if (!open) return; e.stopPropagation(); open(); } }, done ? h(`span.ac-dot${failed ? ".bad" : ""}`) : h("span.ac-spin", { "data-spin": "" }), h("span.ac-name", r.agent ?? planned[i]?.agent), h("span.ac-task", one(r.task ?? planned[i]?.task ?? "", 100)),
           u ? h("span.ac-meta", `${u.turns ?? 0}t · ${tokens((u.input ?? 0) + (u.output ?? 0))} · ${cost(u.cost ?? 0)}`) : null),
         !done && lastTool ? h("div.ac-now", h("span.dim", "› "), lastTool) : null,
         failed && r.errorMessage ? h("div.ac-err", one(r.errorMessage, 300)) : null,
@@ -232,6 +269,9 @@ export function toolNode(tb: ToolBlock, tab: Tab): HTMLElement {
       if (!k.body) return;
       if (isOpen) { opened.delete(tb.id); closed.add(tb.id); } else { opened.add(tb.id); closed.delete(tb.id); }
       tb.v++;
+      // the transcript only redraws a message whose own version moved, so the one holding this call has to move too
+      const it = tab.items.find((i) => i.k === "assistant" && i.blocks.includes(tb));
+      if (it) it.v++;
       tab.emit("items");
     } },
     glyph, h("span.tverb", k.verb), h("span.ttarget", k.target), h("span.tmeta", k.meta ?? null, time ? h("span.ttime", time) : null),

@@ -15,7 +15,11 @@ export const act = {
   pickMode: (_tab: Tab) => {},
   runCommand: async (_tab: Tab | null, _text: string): Promise<boolean> => false,
   refreshDiff: (_tab: Tab) => {},
+  // a subagent run, by whatever the caller knows about it, to something that opens its session. null when there's no session
+  agentRun: (_q: AgentRef): (() => void) | null => null,
 };
+
+export type AgentRef = { sessionFile?: string; hubId?: number; task?: string; agent?: string; cwd?: string };
 
 export const MODES = [
   { id: "ask", label: "ask", hint: "asks before edits and commands" },

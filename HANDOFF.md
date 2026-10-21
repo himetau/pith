@@ -30,6 +30,10 @@ PSS counts shared libraries once, so it's the honest number: the win is small, t
 - markdown in replies is coloured like opencode: headings, bold, italics, inline code and list markers each get a theme accent (`--md-*` in `base.css`), quieter inside thinking.
 - the sidebar only moves a session to the top when you send in it, not when you open it (`Tab.sent`).
 - ui scale: `scale` in settings is the main webview's zoom (`win_zoom`), ctrl+= / ctrl+- / ctrl+0. `Side.layout()` multiplies the pane rects by it, since the native webviews are placed in window pixels. The pane webviews themselves stay at 1.
+- subagent rows in the chat and todo items open the agent's session: `act.agentRun` (set up in `panes.ts`) resolves a run by session file, hub id or task. A todo links when 60% of its words are in a subagent task from the same chat. The extension puts `sessionFile` in each result's details so the link survives reloads.
+- tool rows expand again: clicking bumped only the block's version, and the transcript redraws by message version.
+- `/design` and the design session prompt work from a brief (what, headline, direction, the one detail), build a full site or a working app screen, then screenshot it in the browser and fix it. A run is pricey (~$0.80 for a landing page) because of the screenshot loop.
+- composer at non-1 scales: `overflow-x: hidden` (webkit's zoom overstates textarea width), a vertical scrollbar only at max height, and it re-autosizes when its width changes.
 - voxel icon: `packaging/voxel-icon.py` renders it at any size; the install script renders each hicolor size on its own.
 
 ## Outside the repo

@@ -68,6 +68,9 @@ export class Composer {
     this.ta.placeholder = o.placeholder ?? "what should we do  ·  / commands  ·  @ files  ·  ! shell";
     this.ta.addEventListener("input", () => { autosize(this.ta); this.updateMenu(); this.updateShell(); const t = this.o.tab(); if (t) t.draft = this.ta.value; });
     this.ta.addEventListener("keydown", (e) => this.key(e));
+    // a width change (window, side pane, scale) rewraps the text, so the height has to follow. only width: autosize changes the height
+    let w = 0;
+    new ResizeObserver(() => { if (this.ta.clientWidth !== w) { w = this.ta.clientWidth; autosize(this.ta); } }).observe(this.ta);
     this.ta.addEventListener("paste", (e) => this.paste(e));
     this.ta.addEventListener("blur", () => setTimeout(() => this.closeMenu(), 150));
     this.el.addEventListener("dragover", (e) => { e.preventDefault(); this.el.classList.add("drop"); });

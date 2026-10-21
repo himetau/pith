@@ -62,5 +62,8 @@ export function debounce<A extends unknown[]>(fn: (...a: A) => void, ms: number)
 
 export function autosize(ta: HTMLTextAreaElement, max = 320) {
   ta.style.height = "auto";
-  ta.style.height = `${Math.min(ta.scrollHeight, max)}px`;
+  // scrollHeight is rounded, and zoomed it can come out a pixel short of the text. so a scrollbar only once it's at max,
+  // below that a pixel of rounding would put one in
+  ta.style.height = `${Math.min(ta.scrollHeight + 1, max)}px`;
+  ta.style.overflowY = ta.scrollHeight > max ? "auto" : "hidden";
 }

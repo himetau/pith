@@ -61,7 +61,7 @@ button:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
 ::-webkit-scrollbar-thumb:hover { background-color: var(--dim); }
 ::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
 
-.ic { width: 1.05em; height: 1.05em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; vertical-align: -.15em; }
+.ic { width: 1.2em; height: 1.2em; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; vertical-align: -.22em; }
 .dim { color: var(--dim); }
 .mid { color: var(--mid); }
 .accent { color: var(--accent); }

@@ -37,6 +37,8 @@ body.resizing webview { pointer-events: none; }
 .legend-btn:hover { color: var(--text); }
 .legend-btn.on { color: var(--accent); }
 .legend-btn.ico { padding: 0 4px; }
+/* the icon only buttons in the borders are the ones you aim for, so they get more size than inline icons */
+.legend-btn.ico .ic { width: 1.45em; height: 1.45em; }
 .legend-btn .count { font-size: .85em; min-width: 1.3em; text-align: center; border-radius: 3px; background: var(--primary); color: var(--on-primary); }
 
 .main-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: var(--round); }

@@ -146,7 +146,7 @@ export class ChatView {
     swap(this.todos,
       h("button.ts-head", { onclick: () => { this.todosOpen = !this.todosOpen; this.drawTodos(); } },
         h("span.ts-bar", todos.map((t) => h(`i.${t.status}`))), h("span", `${done}/${todos.length}`), cur ? h("span.dim", ` · ${cur.content}`) : null, icon(this.todosOpen ? "down" : "chevron")),
-      this.todosOpen ? todoList(todos) : null,
+      this.todosOpen ? todoList(todos, this.tab) : null,
     );
   }
 

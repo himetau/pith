@@ -320,6 +320,13 @@ class Agents {
   constructor() {
     this.el.append(h("div.pbar", h("span", "subagents"), h("span.grow"), h("button.btn.sm.ghost", { onclick: () => app.show("agents") }, "library")), this.list);
     const got = (s: any) => { hub = s; this.syncTabs(); this.draw(); app.emit("tabs"); };
+    act.agentRun = (q) => {
+      const a = (hub?.agents ?? []).filter((x: any) => (q.sessionFile && x.sessionFile === q.sessionFile) || (q.hubId != null && x.id === q.hubId) || (q.task && x.task === q.task))
+        .sort((x: any, y: any) => y.startedAt - x.startedAt)[0];
+      const file = q.sessionFile ?? a?.sessionFile;
+      if (!file) return null;
+      return () => app.openAgent({ sessionFile: file, cwd: a?.cwd ?? q.cwd ?? app.active?.cwd ?? app.sys.home, agent: a?.agent ?? q.agent ?? "agent", task: a?.task ?? q.task ?? "", running: !!a && RUNNING.includes(a.status) });
+    };
     void api.agentHub().then(got);
     api.on("agents:hub", got);
     // failures age out on their own, not only when the hub changes
