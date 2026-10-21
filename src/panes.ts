@@ -545,6 +545,9 @@ export class Side {
       const slots: WebSlot[] = [];
       if (t && !covered && this.current === "browser") { const s = this.browser.slot(t); if (s) slots.push(s); }
       if (t && !covered && this.current === "preview") { const s = this.preview.slot(t); if (s) slots.push(s); }
+      // rects come back in css pixels, the native webviews are placed in window pixels
+      const z = app.settings.scale || 1;
+      if (z !== 1) for (const s of slots) { s.x *= z; s.y *= z; s.w *= z; s.h *= z; }
       void api.webLayout(slots).catch((e) => console.error("web layout", e));
     });
   }

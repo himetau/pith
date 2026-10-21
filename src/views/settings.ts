@@ -5,7 +5,7 @@ import { api, type Settings } from "../lib/api";
 import { h, swap } from "../lib/dom";
 import { tilde } from "../lib/fmt";
 import { icon } from "../lib/icons";
-import { applyLook } from "../look";
+import { applyLook, SCALES } from "../look";
 
 export class SettingsPage {
   el = h("div.page.settings");
@@ -35,7 +35,8 @@ export class SettingsPage {
         field("theme", sys.theme.found ? "from matugen, follows your wallpaper live" : "matugen hasn't written it yet. run your wallpaper script once", h("span.mono", tilde(sys.theme.file))),
         field("font", `empty uses your terminal's${sys.font ? ` (${sys.font.family})` : ""}`, text(st.font, (v) => save({ font: v }), sys.font?.family ?? "monospace")),
         field("reading font", "for replies. empty keeps them in the same font", text(st.proseFont, (v) => save({ proseFont: v }), "same as above")),
-        field("size", "", num(st.fontSize, 10, 22, (v) => save({ fontSize: v }))),
+        field("scale", "everything in the window. ctrl+= and ctrl+- step it, ctrl+0 resets", seg(SCALES.map(pct), pct(st.scale || 1), (v) => save({ scale: parseFloat(v) / 100 }))),
+        field("text size", "", num(st.fontSize, 10, 22, (v) => save({ fontSize: v }))),
         field("windows", "gaps, borders and corners come from hyprland", h("span.mono", `gap ${sys.hypr.gap} · border ${sys.hypr.border} · rounding ${sys.hypr.rounding}`)),
       ),
       group("budgets",
@@ -52,7 +53,7 @@ export class SettingsPage {
       ),
       group("keys",
         h("div.keys", [
-          ["ctrl+n", "new session"], ["ctrl+k", "commands"], ["ctrl+p", "find a session"], ["ctrl+b", "sidebar"], ["ctrl+\\", "side window"],
+          ["ctrl+n", "new session"], ["ctrl+k", "commands"], ["ctrl+p", "find a session"], ["ctrl+b", "sidebar"], ["ctrl+= / ctrl+-", "scale"], ["ctrl+\\", "side window"],
           ["alt+1…6", "web · preview · changes · files · agents · terminal"], ["shift+tab", "cycle mode"], ["ctrl+m", "model"], ["ctrl+e", "effort"],
           ["esc", "stop the run"], ["enter while running", "steer"], ["alt+enter", "queue for after"], ["↑", "last prompt"], ["!cmd", "run in shell, output goes to context"], ["!!cmd", "shell, kept out of context"],
         ].map(([k, v]) => h("div.key", h("kbd", k), h("span", v)))),
@@ -91,6 +92,8 @@ function toggle(v: boolean, on: (v: boolean) => void) {
   const b = h(`button.toggle${v ? ".on" : ""}`, { onclick: () => { v = !v; b.classList.toggle("on", v); on(v); } }, h("i"));
   return b;
 }
+
+const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 function seg(opts: readonly string[], v: string, on: (v: string) => void) {
   const box = h("div.segs");

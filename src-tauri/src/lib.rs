@@ -240,6 +240,9 @@ fn win_minimize(app: AppHandle) { if let Some(w) = app.get_window("main") { let 
 fn win_maximize(app: AppHandle) { if let Some(w) = app.get_window("main") { if w.is_maximized().unwrap_or(false) { let _ = w.unmaximize(); } else { let _ = w.maximize(); } } }
 #[tauri::command]
 fn win_close(app: AppHandle) { if let Some(w) = app.get_window("main") { let _ = w.close(); } }
+// the ui's scale is the main webview's zoom. the pane webviews keep 1, pages should look like they do in a browser
+#[tauri::command]
+fn win_zoom(app: AppHandle, scale: f64) { if let Some(w) = app.get_webview("main") { let _ = w.set_zoom(scale.clamp(0.5, 3.0)); } }
 
 // ---------- terminal ----------
 #[tauri::command]
@@ -392,7 +395,7 @@ pub fn run() {
             sessions_list, sessions_trash, meta_all, meta_set, usage_get, settings_get, settings_set, sys_info,
             git_status, git_diff, git_branch, fs_list, fs_read, fs_write, fs_exists, fs_pick_dir, fs_pick_files,
             preview_watch, preview_unwatch, agents_defs, agents_save, agents_hub, agents_session, images_list, images_generate,
-            open_external, open_path, open_reveal, clip_write, clip_image, notify, win_focused, win_minimize, win_maximize, win_close,
+            open_external, open_path, open_reveal, clip_write, clip_image, notify, win_focused, win_minimize, win_maximize, win_close, win_zoom,
             term_open, term_write, term_resize, term_close,
             web_layout, web_navigate, web_go, web_url, web_eval, web_close,
         ])

@@ -19,13 +19,16 @@ cp -r "$repo/ext" "$repo/prompts" "$lib/"
 # each size is rendered on its own, a voxel icon scaled down from 1024 goes to mush
 for s in 16 32 48 64 128 256 512; do
   mkdir -p "$data/icons/hicolor/${s}x${s}/apps"
-  python3 "$repo/packaging/voxel-icon.py" "$data/icons/hicolor/${s}x${s}/apps/pith.png" $s >/dev/null
+  python3 "$repo/packaging/voxel-icon.py" "$data/icons/hicolor/${s}x${s}/apps/.pith.png" $s >/dev/null
+  mv -f "$data/icons/hicolor/${s}x${s}/apps/.pith.png" "$data/icons/hicolor/${s}x${s}/apps/pith.png"
 done
 # the old icon was an svg, and scalable wins over the pngs
 rm -f "$data/icons/hicolor/scalable/apps/pith.svg"
 
 mkdir -p "$data/applications"
-sed "s|^Exec=.*|Exec=$lib/pith|" "$repo/packaging/pith.desktop" > "$data/applications/pith.desktop"
+# written whole then renamed: launchers watching the folder can catch a half-written file and drop the entry
+sed "s|^Exec=.*|Exec=$lib/pith|" "$repo/packaging/pith.desktop" > "$data/applications/.pith.desktop.new"
+mv -f "$data/applications/.pith.desktop.new" "$data/applications/pith.desktop"
 
 command -v gtk-update-icon-cache >/dev/null && gtk-update-icon-cache -q -t "$data/icons/hicolor" || true
 command -v update-desktop-database >/dev/null && update-desktop-database -q "$data/applications" || true

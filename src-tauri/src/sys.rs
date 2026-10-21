@@ -27,7 +27,7 @@ fn defaults() -> Value {
         "notify": true, "budget": { "window5h": 0, "week": 0, "month": 0 },
         "imageModel": "gemini-3.1-flash-image", "imageCost": 0, "imageProvider": "my-endpoint",
         "browserHome": "https://duckduckgo.com", "designDir": h.join("Designs"), "pinned": [], "maxLive": 6,
-        "sidebar": true, "paneWidth": 520
+        "sidebar": true, "paneWidth": 520, "scale": 1.0
     })
 }
 fn settings_file() -> PathBuf { config_dir().join("settings.json") }

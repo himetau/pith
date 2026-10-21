@@ -29,6 +29,7 @@ PSS counts shared libraries once, so it's the honest number: the win is small, t
 - agents pane: only running agents, and failed or aborted ones from the last 15 minutes (a kill by the user doesn't count). Failures can be dismissed. Click one to open its session as a tab: read straight off disk while it runs (`agents_session` in `sys.rs`, `Tab.watch`/`peek()`), and a normal session you can type in once it's done.
 - markdown in replies is coloured like opencode: headings, bold, italics, inline code and list markers each get a theme accent (`--md-*` in `base.css`), quieter inside thinking.
 - the sidebar only moves a session to the top when you send in it, not when you open it (`Tab.sent`).
+- ui scale: `scale` in settings is the main webview's zoom (`win_zoom`), ctrl+= / ctrl+- / ctrl+0. `Side.layout()` multiplies the pane rects by it, since the native webviews are placed in window pixels. The pane webviews themselves stay at 1.
 - voxel icon: `packaging/voxel-icon.py` renders it at any size; the install script renders each hicolor size on its own.
 
 ## Outside the repo

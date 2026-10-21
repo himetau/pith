@@ -11,7 +11,7 @@ import { api, type Mode } from "./lib/api";
 import { h, swap } from "./lib/dom";
 import { ago, base, home, tilde, titleFrom } from "./lib/fmt";
 import { icon } from "./lib/icons";
-import { applyLook, applyTheme } from "./look";
+import { applyLook, applyTheme, stepScale } from "./look";
 import { PANES, Side } from "./panes";
 import { onTab, type Tab } from "./tab";
 import { AgentsPage } from "./views/agents";
@@ -160,6 +160,9 @@ function mount() {
       case "ctrl+b": return run(() => { const on = !document.body.classList.toggle("no-sidebar"); void app.saveSettings({ sidebar: on }); });
       case "ctrl+\\": return run(() => { if (t) act.togglePane(t, t.pane ?? "browser"); });
       case "ctrl+,": return run(() => app.show("settings"));
+      case "ctrl+=": case "ctrl++": case "ctrl+shift++": return run(() => stepScale(1));
+      case "ctrl+-": return run(() => stepScale(-1));
+      case "ctrl+0": return run(() => stepScale(0));
       case "ctrl+m": if (inChat) return run(() => act.pickModel(t!)); return;
       case "ctrl+e": if (inChat) return run(() => act.pickEffort(t!)); return;
       case "Escape":

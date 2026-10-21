@@ -13,7 +13,7 @@ export type SessionInfo = { file: string; id: string; cwd: string; name?: string
 export type Spend = [ts: number, model: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number];
 export type UsageReport = { spend: { s: number; rows: Spend[] }[]; sessions: { file: string; title: string; cwd: string; updated: number; usage: SessionInfo["usage"] }[] };
 export type Settings = {
-  piPath: string; extraArgs: string; defaultCwd: string; mode: Mode; font: string; proseFont: string; fontSize: number; notify: boolean;
+  piPath: string; extraArgs: string; defaultCwd: string; mode: Mode; font: string; proseFont: string; fontSize: number; scale: number; notify: boolean;
   budget: { window5h: number; week: number; month: number }; imageModel: string; imageCost: number; imageProvider: string; browserHome: string; designDir: string;
   pinned: string[]; maxLive: number; sidebar: boolean; paneWidth: number;
 };
@@ -77,6 +77,7 @@ export type Api = {
   minimize: Fn<[], void>;
   maximize: Fn<[], void>;
   close: Fn<[], void>;
+  zoom: Fn<[scale: number], void>;
   // a file the ui can put in an <img>, through tauri's asset protocol
   fileSrc(path: string): string;
   on(ch: string, fn: (...a: any[]) => void): () => void;
@@ -106,7 +107,7 @@ export const api: Api = {
   termOpen: call("term_open", ["id", "cwd", "cols", "rows"]), termWrite: call("term_write", ["id", "data"]), termResize: call("term_resize", ["id", "cols", "rows"]), termClose: call("term_close", ["id"]),
   webLayout: call("web_layout", ["slots"]), webNavigate: call("web_navigate", ["tab", "url"]), webGo: call("web_go", ["kind", "tab", "what"]),
   webUrl: call("web_url", ["kind", "tab"]), webEval: call("web_eval", ["kind", "tab", "js"]), webClose: call("web_close", ["tab"]),
-  minimize: call("win_minimize"), maximize: call("win_maximize"), close: call("win_close"),
+  minimize: call("win_minimize"), maximize: call("win_maximize"), close: call("win_close"), zoom: call("win_zoom", ["scale"]),
   fileSrc: (p) => convertFileSrc(p),
   // events carry their arguments as an array, same order the views were written against
   on(ch, fn) {
