@@ -1,8 +1,12 @@
 [Desktop Entry]
 Type=Application
 Name=pith
-Comment=A desktop for pi
-Exec=sh -c "cd $HOME/src/pith && node_modules/.bin/electron ."
+GenericName=AI coding agent
+Comment=A desktop for pi: sessions, a browser it drives, design previews, reviews, usage
+Exec=pith
 Icon=pith
+Terminal=false
 Categories=Development;
+Keywords=pi;agent;ai;llm;chat;gemini;
 StartupWMClass=pith
+StartupNotify=true

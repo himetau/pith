@@ -11,11 +11,13 @@ npm install
 npm start
 ```
 
-`npm start` builds and opens it. pi has to be on your PATH (or set its path in settings), and python3 for the terminal pane. To get it in rofi:
+`npm start` builds and opens it. pi has to be on your PATH (or set its path in settings), and python3 for the terminal pane. To get it in quickshell's launcher (and rofi, anything that reads .desktop files):
 
 ```sh
-cp packaging/pith.desktop ~/.local/share/applications/
+scripts/install-desktop.sh
 ```
+
+That installs the icon into the hicolor theme and an entry that runs this repo's build, so after `npm run build` the launcher opens the new one. Pass `--appimage` to have it run `release/pith.AppImage` instead.
 
 `npm run dist` makes an AppImage in `release/` instead, if you'd rather not run it from the repo.
 
