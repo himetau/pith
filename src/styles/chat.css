@@ -308,3 +308,19 @@
 .ac-head.link { cursor: pointer; }
 .ac-head.link:hover .ac-name, .todo .tt.link:hover { text-decoration: underline; text-underline-offset: 3px; }
 .todo .tt.link { cursor: pointer; text-decoration: underline dotted color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 3px; }
+
+/* the working line opens into the run, step by step */
+.run-head { display: inline-flex; align-items: baseline; gap: 8px; color: inherit; }
+.run-head .ic { align-self: center; color: var(--dim); }
+.run-head:hover .run-word { text-decoration: underline; text-underline-offset: 3px; }
+.run-steps { flex-basis: 100%; margin-top: 4px; padding: 6px 0 2px 12px; border-left: 1px solid var(--rule); display: flex; flex-direction: column; gap: 2px; }
+.run-step { display: flex; gap: 10px; align-items: baseline; min-width: 0; color: var(--mid); }
+.run-step.live { color: var(--text); }
+.run-step.bad .rs-g { color: var(--red); }
+.rs-g { width: 1ch; flex-shrink: 0; color: var(--accent); }
+.rs-k { flex-shrink: 0; min-width: 6ch; color: var(--md-mark); }
+.rs-w { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rs-t { flex-shrink: 0; color: var(--dim); font-size: .9em; }
+.run-now { margin-top: 8px; }
+.run-now-h { color: var(--dim); font-size: .9em; margin-bottom: 2px; }
+.run-now-t { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--mid); font-size: .92em; }

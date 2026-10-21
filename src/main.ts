@@ -11,6 +11,7 @@ import { api, type Mode } from "./lib/api";
 import { h, swap } from "./lib/dom";
 import { ago, base, home, tilde, titleFrom } from "./lib/fmt";
 import { icon } from "./lib/icons";
+import { toggleFps } from "./fps";
 import { applyLook, applyTheme, stepScale } from "./look";
 import { PANES, Side } from "./panes";
 import { onTab, type Tab } from "./tab";
@@ -163,6 +164,7 @@ function mount() {
       case "ctrl+=": case "ctrl++": case "ctrl+shift++": return run(() => stepScale(1));
       case "ctrl+-": return run(() => stepScale(-1));
       case "ctrl+0": return run(() => stepScale(0));
+      case "ctrl+shift+f": return run(() => toggleFps());
       case "ctrl+m": if (inChat) return run(() => act.pickModel(t!)); return;
       case "ctrl+e": if (inChat) return run(() => act.pickEffort(t!)); return;
       case "Escape":

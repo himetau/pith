@@ -33,6 +33,8 @@ export class ChatView {
   private raf = 0;
   private askKey: KeyHandler | null = null;
   private todosOpen = true;
+  // the working line opens into the run's steps
+  private stepsOpen = false;
   private off: () => void;
 
   constructor(private tab: Tab) {
@@ -71,7 +73,7 @@ export class ChatView {
 
   private schedule() {
     if (this.raf) return;
-    this.raf = requestAnimationFrame(() => { this.raf = 0; this.drawItems(); });
+    this.raf = requestAnimationFrame(() => { this.raf = 0; this.drawItems(); if (this.stepsOpen && this.tab.running) this.drawLive(); });
   }
 
   renderAll() {
@@ -104,7 +106,11 @@ export class ChatView {
     if (t.status === "dead") return swap(this.live, h("span.bad", "pi stopped"), t.error ? h("pre.dead-err", t.error.slice(-1500)) : null, h("button.mini", { onclick: () => void t.ensure() }, "start again"));
     if (t.compacting) return swap(this.live, h("span", { "data-spin": "" }), " compacting context");
     if (t.retry) return swap(this.live, h("span.warn", { "data-spin": "" }), ` retry ${t.retry.attempt}/${t.retry.max} · `, h("span.dim", t.retry.error.slice(0, 120)));
-    if (t.running) return swap(this.live, h("span.run-spin", { "data-spin": "" }), h("span.run-word", "working"), h("span.dim", { "data-since": String(t.runStart || Date.now()) }), h("span.dim", "·  esc to stop"));
+    if (t.running) return swap(this.live,
+      h("button.run-head", { title: this.stepsOpen ? "hide the steps" : "show what it's doing, step by step", onclick: () => { this.stepsOpen = !this.stepsOpen; this.drawLive(); } },
+        h("span.run-spin", { "data-spin": "" }), h("span.run-word", "working"), h("span.dim", { "data-since": String(t.runStart || Date.now()) }), icon(this.stepsOpen ? "down" : "chevron")),
+      h("span.dim", "·  esc to stop"),
+      this.stepsOpen ? runSteps(t) : null);
     swap(this.live);
   }
 
@@ -183,6 +189,56 @@ function emptyState(tab: Tab, fill: (t: string) => void) {
     h("div.empty-starters", starters.map(([cmd, rest]) => h("button.starter", { onclick: () => fill(cmd + (rest.includes("…") ? "" : rest)) }, h("span.accent", cmd || "❯ "), h("span.dim", rest)))),
     h("div.empty-keys", h("span", h("kbd", "shift+tab"), " mode"), h("span", h("kbd", "ctrl+k"), " commands"), h("span", h("kbd", "@"), " files"), h("span", h("kbd", "!"), " shell")),
   );
+}
+
+// the current run as a list: every thinking stretch, tool call and reply since the last prompt, then a live tail of
+// whatever is happening now (the thinking as it streams, or the running tool's output)
+function runSteps(t: Tab) {
+  let from = 0;
+  t.items.forEach((it, i) => { if (it.k === "user") from = i + 1; });
+  const steps: HTMLElement[] = [];
+  let now: { label: string; text: string } | null = null;
+  const tail = (s: string, n = 900) => (s.length > n ? "…" + s.slice(-n) : s).trim();
+  for (const it of t.items.slice(from)) {
+    if (it.k === "bash") steps.push(step(it.running, "$", it.command, null));
+    if (it.k !== "assistant") continue;
+    for (const b of it.blocks) {
+      if (!b) continue;
+      if (b.t === "thinking") {
+        const live = it.live && b.ms == null && b === it.blocks[it.blocks.length - 1];
+        steps.push(step(live, "think", firstLine(b.text) || "thinking", b.ms ?? null, false, live ? b.started : undefined));
+        if (live) now = { label: "thinking", text: tail(b.text) };
+      } else if (b.t === "tool") {
+        const live = b.status === "running" || b.status === "streaming" || b.status === "queued";
+        steps.push(step(live, b.name, toolGist(b.args), b.ms ?? null, b.status === "error" || !!b.result?.isError, live ? b.started : undefined));
+        if (live) {
+          const out = (b.partial?.content ?? []).map((c: any) => c.text ?? "").join("");
+          now = { label: `${b.name} ${b.status === "streaming" ? "being written" : "running"}`, text: tail(out || b.argsText || JSON.stringify(b.args ?? {}, null, 1)) };
+        }
+      } else if (b.t === "text") {
+        const live = it.live && b === it.blocks[it.blocks.length - 1];
+        steps.push(step(live, "reply", firstLine(b.text), null));
+      }
+    }
+  }
+  return h("div.run-steps",
+    steps.length ? steps : h("div.dim", "waiting on the model"),
+    now ? h("div.run-now", h("div.run-now-h", now.label), now.text ? h("pre.run-now-t", now.text) : null) : null);
+}
+
+// a live step's clock runs off the shared ticker (data-since), a finished one shows how long it took
+function step(live: boolean, kind: string, what: string, ms: number | null, bad = false, started?: number) {
+  return h(`div.run-step${live ? ".live" : ""}${bad ? ".bad" : ""}`,
+    live ? h("span.rs-g", { "data-spin": "" }) : h("span.rs-g", bad ? "✗" : "·"),
+    h("span.rs-k", kind), h("span.rs-w", what), started ? h("span.rs-t", { "data-since": String(started) }, dur(Date.now() - started)) : ms != null ? h("span.rs-t", dur(ms)) : null);
+}
+
+const firstLine = (s: string) => (s ?? "").trim().split("\n")[0].replace(/^[#*\s]+/, "").slice(0, 140);
+
+function toolGist(a: any): string {
+  if (!a) return "";
+  const v = a.command ?? a.path ?? a.file_path ?? a.pattern ?? a.url ?? a.query ?? a.task ?? a.action ?? a.prompt;
+  return typeof v === "string" ? v.split("\n")[0].slice(0, 140) : JSON.stringify(a).slice(0, 140);
 }
 
 // spinners and elapsed timers tick on one shared clock

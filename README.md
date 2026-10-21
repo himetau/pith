@@ -53,7 +53,7 @@ Settings live in `~/.config/pith/settings.json`, the matugen output in `~/.confi
 
 ## Keys
 
-ctrl+n new session · ctrl+= / ctrl+- / ctrl+0 scale · ctrl+shift+n new design · ctrl+k commands · ctrl+p find a session · ctrl+b sidebar · ctrl+\ side pane · alt+1–6 web, preview, changes, files, agents, terminal · ctrl+m model · ctrl+e effort · shift+tab mode · esc stop · ↑ last prompt
+ctrl+n new session · ctrl+= / ctrl+- / ctrl+0 scale · ctrl+shift+f fps · ctrl+shift+n new design · ctrl+k commands · ctrl+p find a session · ctrl+b sidebar · ctrl+\ side pane · alt+1–6 web, preview, changes, files, agents, terminal · ctrl+m model · ctrl+e effort · shift+tab mode · esc stop · ↑ last prompt
 
 ## Not there yet
 

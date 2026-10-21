@@ -149,3 +149,6 @@ body.resizing webview { pointer-events: none; }
 .toast.warning { border-left-color: var(--gold); }
 .toast .tk { color: var(--dim); }
 @keyframes toast-in { from { transform: translateY(6px); opacity: 0; } }
+
+/* ctrl+shift+f */
+.fps { position: fixed; right: 14px; bottom: 34px; z-index: 50; padding: 2px 8px; border-radius: 4px; background: var(--surface-highest); color: var(--text); font-size: .85em; pointer-events: none; }
