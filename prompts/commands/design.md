@@ -21,7 +21,7 @@ Work like a product designer handing over a finished design, not a sketch.
    - a palette built as CSS variables, one strong accent used sparingly
    - spacing on a rhythm, alignment that holds, density that suits the thing (marketing breathes, tools are tight)
    - responsive down to phone width
-   - `generate_image` for any photography or illustration it needs, saved into the folder. No grey placeholder boxes
+   - **never generate images.** Don't call `generate_image`, not for photos, illustrations, logos or backgrounds. The visuals come from type, colour, layout, CSS and inline SVG: a wordmark set in the display face, SVG marks and icons, patterns and texture in CSS, product UI drawn in HTML. No grey placeholder boxes either, design around not having photos
 
 4. **Then look at it.** Open the file in the `browser` tool (a `file://` url) and take a screenshot, scroll and take more for a long page. Check it against the brief, fix what's off, and only then say you're done.
 

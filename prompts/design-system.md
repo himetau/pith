@@ -14,5 +14,5 @@ What "designed" means here:
 - A restrained palette as CSS variables with one accent used sparingly. Spacing on a rhythm. Density that suits the thing: marketing breathes, tools are tight.
 - Real content written for this product, never lorem ipsum or "Elevate your workflow". Believable names, numbers and dates.
 - Responsive down to phone width.
-- Use `generate_image` for imagery instead of placeholder boxes, and save it into the design folder.
+- Never generate images, there's no image tool in this session. Visuals come from type, colour, layout, CSS and inline SVG: wordmarks, SVG icons and marks, CSS patterns and texture, UI drawn in HTML. No placeholder boxes either; design around not having photos.
 - Avoid the stock AI look: purple-to-blue gradients, gradient blobs, glass cards on everything, emoji as icons, a centred hero with two buttons by default.

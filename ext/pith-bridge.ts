@@ -9,6 +9,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { generateImage } from "./imagegen.ts";
 
 const BRIDGE = process.env.PITH_BRIDGE, TOKEN = process.env.PITH_TOKEN ?? "", TAB = process.env.PITH_TAB ?? "";
+// design sessions never generate images, the design has to carry itself, so they don't get the tool at all
+const DESIGN = process.env.PITH_KIND === "design";
 
 async function call<T = any>(op: string, args: object = {}): Promise<T> {
   const res = await fetch(`${BRIDGE}/call`, { method: "POST", headers: { "content-type": "application/json", "x-pith-token": TOKEN }, body: JSON.stringify({ tab: TAB, op, args }) });
@@ -150,7 +152,7 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  pi.registerTool({
+  if (!DESIGN) pi.registerTool({
     name: "generate_image",
     label: "Image",
     description: "Generate an image from a prompt, or edit/combine existing images by passing their paths. Saves to disk and shows it in the chat. Write a specific prompt: subject, style, composition, colours, any text that has to appear.",

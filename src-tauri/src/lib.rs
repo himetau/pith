@@ -54,7 +54,8 @@ async fn pi_start(app: AppHandle, o: StartOpts) -> Value {
     args.extend(split_args(&extra));
     let _ = std::fs::create_dir_all(&o.cwd);
     let (url, token) = BRIDGE.get().unwrap().clone();
-    let env = vec![("PITH_BRIDGE".into(), url), ("PITH_TOKEN".into(), token), ("PITH_TAB".into(), o.tab.clone())];
+    let env = vec![("PITH_BRIDGE".into(), url), ("PITH_TOKEN".into(), token), ("PITH_TAB".into(), o.tab.clone()),
+        ("PITH_KIND".into(), o.kind.clone().unwrap_or_else(|| "chat".into()))];
     let bin = settings["piPath"].as_str().unwrap_or("pi").to_string();
     let (a1, a2, t1, t2) = (app.clone(), app.clone(), o.tab.clone(), o.tab.clone());
     let pid_cell: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
