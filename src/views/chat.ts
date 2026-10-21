@@ -2,6 +2,7 @@
 import { act } from "../actions";
 import { app } from "../app";
 import { runBuiltin } from "../commands";
+import { api } from "../lib/api";
 import { h, swap } from "../lib/dom";
 import { dur, plural, tilde } from "../lib/fmt";
 import { icon } from "../lib/icons";
@@ -200,12 +201,12 @@ onTab((t, what) => {
     const last = [...t.items].reverse().find((i) => i.k === "assistant");
     const text = last && last.k === "assistant" ? last.blocks.filter((b) => b?.t === "text").map((b) => (b as { text: string }).text).join(" ") : "";
     const asks = t.asks.length ? ` · ${plural(t.asks.length, "question")} waiting` : "";
-    void window.pith.notify(t.title, (text.slice(0, 180) || "finished") + asks);
+    void api.notify(t.title, (text.slice(0, 180) || "finished") + asks);
   }
   void app.refreshSessions();
 });
 onTab((t, what) => {
-  if (what === "asks" && t.asks.length && app.settings.notify) void window.pith.notify(t.title, "needs your answer");
+  if (what === "asks" && t.asks.length && app.settings.notify) void api.notify(t.title, "needs your answer");
   if (what.startsWith("toast:")) { const [, level, ...rest] = what.split(":"); app.toast(rest.join(":"), level); }
   if (what === "tool:preview" || what === "tool:browser") act.openPane(t, what.slice(5));
   if (what === "tooldone:edit" || what === "tooldone:write") act.refreshDiff(t);

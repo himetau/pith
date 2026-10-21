@@ -78,7 +78,7 @@ export async function runBuiltin(tab: Tab | null, text: string): Promise<boolean
       void tab.send(`Generate this image with generate_image, then show it: ${arg}`);
       break;
     case "browser":
-      if (arg) tab.browserUrl = /^[a-z]+:/i.test(arg) ? arg : `https://${arg}`;
+      if (arg) { tab.browserUrl = /^[a-z]+:/i.test(arg) ? arg : `https://${arg}`; void api.webNavigate(tab.id, tab.browserUrl).catch(() => { /* not made yet, it'll open there */ }); }
       act.openPane(tab, "browser");
       break;
     case "preview": case "diff": case "files": case "agents": case "terminal": act.openPane(tab, name); break;

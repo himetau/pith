@@ -1,8 +1,8 @@
 // The window to the right of the chat. One per session: web, preview, changes, files, agents
 import { act } from "./actions";
 import { app } from "./app";
-import { api } from "./lib/api";
-import { debounce, h, swap } from "./lib/dom";
+import { api, type WebSlot } from "./lib/api";
+import { h, swap } from "./lib/dom";
 import { ago, base, bytes, cost, dur, tilde, tokens } from "./lib/fmt";
 import { icon } from "./lib/icons";
 import { highlight, langOf } from "./lib/md";
@@ -23,116 +23,119 @@ export const PANES = [
 const abs = (tab: Tab, p: string) => (p.startsWith("/") ? p : p.startsWith("~") ? app.sys.home + p.slice(1) : `${tab.cwd.replace(/\/$/, "")}/${p.replace(/^\.\//, "")}`);
 
 // ---------- web ----------
+// the page itself is a native webview the backend lays over .wv-host; this is only the chrome around it
 class Browser {
   el = h("div.pane.browser");
-  private host = h("div.wv-host");
+  host = h("div.wv-host");
   private url = h("input.url", { spellcheck: false }) as HTMLInputElement;
-  private views = new Map<string, Electron.WebviewTag>();
   private badge = h("span.agent-badge", h("span", { "data-spin": "" }), " agent is driving");
+  private driving = new Set<string>();
+  private made = new Set<string>();
   private tab: Tab | null = null;
 
   constructor() {
+    const go = (what: "back" | "forward" | "reload") => { if (this.tab) void api.webGo("web", this.tab.id, what).catch(() => {}); };
     this.el.append(
       h("div.pbar",
-        h("button.pb", { title: "back", onclick: () => this.wv()?.canGoBack() && this.wv()!.goBack() }, icon("back")),
-        h("button.pb", { title: "forward", onclick: () => this.wv()?.canGoForward() && this.wv()!.goForward() }, icon("fwd")),
-        h("button.pb", { title: "reload", onclick: () => this.wv()?.reload() }, icon("refresh")),
+        h("button.pb", { title: "back", onclick: () => go("back") }, icon("back")),
+        h("button.pb", { title: "forward", onclick: () => go("forward") }, icon("fwd")),
+        h("button.pb", { title: "reload", onclick: () => go("reload") }, icon("refresh")),
         this.url,
         this.badge,
-        h("button.pb", { title: "open in your browser", onclick: () => { const u = this.wv()?.getURL(); if (u) void api.openExternal(u); } }, icon("external")),
+        h("button.pb", { title: "open in your browser", onclick: async () => { if (!this.tab) return; const u = await api.webUrl("web", this.tab.id); if (u) void api.openExternal(u); } }, icon("external")),
       ),
       this.host,
     );
     this.url.addEventListener("keydown", (e) => {
-      if (e.key !== "Enter") return;
+      if (e.key !== "Enter" || !this.tab) return;
       let u = this.url.value.trim();
       if (!u) return;
       if (!/^[a-z]+:/i.test(u)) u = /\s/.test(u) || !u.includes(".") ? `https://duckduckgo.com/?q=${encodeURIComponent(u)}` : `https://${u}`;
-      void this.wv()?.loadURL(u);
-      this.wv()?.focus();
+      this.tab.browserUrl = u;
+      if (this.made.has(this.tab.id)) void api.webNavigate(this.tab.id, u).catch(() => {});
+      this.url.blur();
+    });
+    api.on("browser:url", (id: string, u: string) => {
+      this.made.add(id);
+      if (this.tab?.id === id && document.activeElement !== this.url) this.url.value = u;
     });
     onTab((t, w) => {
-      if (w === "tool:browser") this.view(t)?.classList.add("driving");
-      if (w === "tooldone:browser" || w === "settled") this.view(t)?.classList.remove("driving");
-      if (t === this.tab) this.badge.classList.toggle("on", !!this.view(t)?.classList.contains("driving"));
+      if (w === "tool:browser") this.driving.add(t.id);
+      if (w === "tooldone:browser" || w === "settled") this.driving.delete(t.id);
+      if (t === this.tab) this.drawBadge();
     });
   }
 
-  private wv() { return this.tab ? this.views.get(this.tab.id) : undefined; }
-  private view(t: Tab) { return this.views.get(t.id); }
-
-  // every session keeps its own page alive while the pane shows another
-  ensure(t: Tab) {
-    let wv = this.views.get(t.id);
-    if (wv) return wv;
-    wv = document.createElement("webview") as Electron.WebviewTag;
-    wv.setAttribute("partition", "persist:pith-web");
-    wv.setAttribute("allowpopups", "");
-    wv.setAttribute("src", t.browserUrl || app.settings.browserHome);
-    let attached = false;
-    wv.addEventListener("dom-ready", () => {
-      if (!attached) { attached = true; void api.attachBrowser(t.id, wv!.getWebContentsId()); }
-    });
-    const sync = () => { t.browserUrl = wv!.getURL(); if (this.tab === t && document.activeElement !== this.url) this.url.value = t.browserUrl; };
-    wv.addEventListener("did-navigate", sync);
-    wv.addEventListener("did-navigate-in-page", sync);
-    wv.addEventListener("did-start-loading", () => wv!.classList.add("loading"));
-    wv.addEventListener("did-stop-loading", () => { wv!.classList.remove("loading"); sync(); });
-    this.views.set(t.id, wv);
-    this.host.append(wv);
-    return wv;
+  private drawBadge() {
+    const on = !!this.tab && this.driving.has(this.tab.id);
+    this.badge.classList.toggle("on", on);
+    this.host.classList.toggle("driving", on);
   }
 
   show(t: Tab) {
     this.tab = t;
-    const wv = this.ensure(t);
-    for (const [id, v] of this.views) v.classList.toggle("on", id === t.id);
-    if (t.browserUrl && wv.getAttribute("src") !== t.browserUrl) { try { if (wv.getURL() !== t.browserUrl) void wv.loadURL(t.browserUrl); } catch { /* not attached yet */ } }
-    try { this.url.value = wv.getURL() || t.browserUrl; } catch { this.url.value = t.browserUrl; }
-    this.badge.classList.toggle("on", wv.classList.contains("driving"));
+    if (document.activeElement !== this.url) this.url.value = t.browserUrl || app.settings.browserHome;
+    this.drawBadge();
   }
 
-  drop(t: Tab) { this.views.get(t.id)?.remove(); this.views.delete(t.id); }
+  // the first layout creates the session's webview at its last known page, later ones only move it
+  slot(t: Tab): WebSlot | null {
+    const r = this.host.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return null;
+    const first = !this.made.has(t.id);
+    this.made.add(t.id);
+    return { kind: "web", tab: t.id, url: first ? t.browserUrl || app.settings.browserHome : undefined, x: r.left, y: r.top, w: r.width, h: r.height };
+  }
+
+  drop(t: Tab) { this.made.delete(t.id); }
 }
 
 // ---------- preview ----------
 const VIEWPORTS = [{ id: "fill", ic: "desktop", w: 0 }, { id: "tablet", ic: "tablet", w: 820 }, { id: "phone", ic: "phone", w: 390 }];
 class Preview {
   el = h("div.pane.preview");
-  private stage = h("div.pv-stage");
+  stage = h("div.pv-stage");
   private label = h("span.pv-path");
   private pickBtn = h("button.pb", { title: "click an element to comment on it" }, icon("pick"), h("span", "comment"));
   private vpBtns = h("div.pv-vps");
   private empty = h("div.pane-empty");
-  private views = new Map<string, Electron.WebviewTag>();
   private tab: Tab | null = null;
   private vp = new Map<string, string>();
+  private watched = new Map<string, string>();
 
-  constructor() {
+  constructor(private relayout: () => void) {
     this.el.append(
       h("div.pbar", this.label, this.vpBtns,
         this.pickBtn,
-        h("button.pb", { title: "reload", onclick: () => this.wv()?.reload() }, icon("refresh")),
+        h("button.pb", { title: "reload", onclick: () => { if (this.tab) void api.webGo("pv", this.tab.id, "reload").catch(() => {}); } }, icon("refresh")),
         h("button.pb", { title: "open html file", onclick: () => void this.openFile() }, icon("folder")),
         h("button.pb", { title: "open in your browser", onclick: () => { const p = this.tab?.preview; if (p) void api.openExternal(p.url ?? `file://${p.path}`); } }, icon("external")),
       ),
       this.stage, this.empty,
     );
-    this.pickBtn.onclick = () => {
-      const on = !this.pickBtn.classList.contains("on");
-      this.pickBtn.classList.toggle("on", on);
-      this.wv()?.send("pick", on);
-    };
-    api.on("preview:changed", debounce((tab: string) => { this.views.get(tab)?.reload(); }, 150));
+    this.pickBtn.onclick = () => this.setPick(!this.pickBtn.classList.contains("on"));
     api.on("preview:open", (tabId: string, args: { path?: string; url?: string; title?: string }) => {
       const t = app.tabs.get(tabId);
       if (!t) return;
       t.preview = args;
       act.openPane(t, "preview");
     });
+    api.on("preview:pick", (tabId: string, d: { selector: string; html: string; text: string }) => {
+      const t = app.tabs.get(tabId);
+      if (!t) return;
+      const tag = (d.html.match(/^<(\w+)/) ?? [])[1] ?? "element";
+      const words = d.text.trim().replace(/\s+/g, " ");
+      act.quote(t, `${t.preview?.path ? tilde(t.preview.path) : "preview"} · ${d.selector}\n${d.html}`, `<${tag}>${words ? ` “${words.slice(0, 48)}${words.length > 48 ? "…" : ""}”` : ""}  ·  ${d.selector}`);
+    });
+    api.on("preview:pick-off", () => this.pickBtn.classList.remove("on"));
+    // a reload drops the page's picker state, so turn it back on if it was
+    api.on("preview:loaded", (tabId: string) => { if (this.tab?.id === tabId && this.pickBtn.classList.contains("on")) this.setPick(true); });
   }
 
-  private wv() { return this.tab ? this.views.get(this.tab.id) : undefined; }
+  private setPick(on: boolean) {
+    this.pickBtn.classList.toggle("on", on);
+    if (this.tab) void api.webEval("pv", this.tab.id, `window.__pithPick && window.__pithPick(${on})`).catch(() => {});
+  }
 
   private async openFile() {
     if (!this.tab) return;
@@ -140,49 +143,34 @@ class Preview {
     if (!f) return;
     this.tab.preview = { path: f };
     this.show(this.tab);
+    this.relayout();
   }
 
   show(t: Tab) {
     this.tab = t;
     const p = t.preview;
-    for (const [id, v] of this.views) v.classList.toggle("on", id === t.id && !!p);
     this.empty.hidden = !!p;
     swap(this.empty, h("div", h("div.pe-t", "nothing to preview"), h("div.dim", "ask for a design, use /design, or open an html file"), h("button.btn", { onclick: () => void this.openFile() }, icon("folder"), "open file")));
-    swap(this.vpBtns, VIEWPORTS.map((v) => h(`button.pb${(this.vp.get(t.id) ?? "fill") === v.id ? ".on" : ""}`, { title: v.id, onclick: () => { this.vp.set(t.id, v.id); this.show(t); } }, icon(v.ic))));
+    swap(this.vpBtns, VIEWPORTS.map((v) => h(`button.pb${(this.vp.get(t.id) ?? "fill") === v.id ? ".on" : ""}`, { title: v.id, onclick: () => { this.vp.set(t.id, v.id); this.show(t); this.relayout(); } }, icon(v.ic))));
+    this.stage.classList.toggle("framed", (this.vp.get(t.id) ?? "fill") !== "fill");
     if (!p) { swap(this.label); return; }
-    const src = p.url ?? `file://${p.path}`;
     swap(this.label, p.title ?? (p.path ? tilde(p.path) : p.url));
-    let wv = this.views.get(t.id);
-    if (!wv) {
-      wv = document.createElement("webview") as Electron.WebviewTag;
-      wv.setAttribute("partition", "pith-preview");
-      wv.addEventListener("ipc-message", (e) => {
-        if (e.channel === "pick") {
-          const d = e.args[0] as { selector: string; html: string; text: string };
-          const tag = (d.html.match(/^<(\w+)/) ?? [])[1] ?? "element";
-          const words = d.text.trim().replace(/\s+/g, " ");
-          act.quote(t, `${t.preview?.path ? tilde(t.preview.path) : "preview"} · ${d.selector}\n${d.html}`, `<${tag}>${words ? ` “${words.slice(0, 48)}${words.length > 48 ? "…" : ""}”` : ""}  ·  ${d.selector}`);
-        }
-        if (e.channel === "pick-off") this.pickBtn.classList.remove("on");
-      });
-      wv.addEventListener("dom-ready", () => { wv!.dataset.ready = "1"; });
-      wv.addEventListener("did-finish-load", () => { if (this.pickBtn.classList.contains("on") && this.tab === t) wv!.send("pick", true); });
-      this.views.set(t.id, wv);
-      this.stage.append(wv);
-    }
-    wv.classList.add("on");
-    if (wv.dataset.src !== src) {
-      // src only counts before the guest exists, after that it has to be a navigation
-      if (wv.dataset.ready) void wv.loadURL(src).catch(() => {}); else wv.setAttribute("src", src);
-      wv.dataset.src = src;
-      if (p.path) void api.watchPreview(t.id, p.path);
-    }
-    const vp = VIEWPORTS.find((v) => v.id === (this.vp.get(t.id) ?? "fill"))!;
-    wv.style.width = vp.w ? `${vp.w}px` : "100%";
-    this.stage.classList.toggle("framed", !!vp.w);
+    if (p.path && this.watched.get(t.id) !== p.path) { this.watched.set(t.id, p.path); void api.watchPreview(t.id, p.path); }
   }
 
-  drop(t: Tab) { this.views.get(t.id)?.remove(); this.views.delete(t.id); void api.unwatchPreview(t.id); }
+  slot(t: Tab): WebSlot | null {
+    const p = t.preview;
+    if (!p) return null;
+    const r = this.stage.getBoundingClientRect();
+    if (r.width < 4 || r.height < 4) return null;
+    const vp = VIEWPORTS.find((v) => v.id === (this.vp.get(t.id) ?? "fill"))!;
+    const pad = vp.w ? 14 : 0;
+    const w = vp.w ? Math.min(vp.w, r.width - pad * 2) : r.width;
+    const url = p.url ?? `file://${encodeURI(p.path!)}`;
+    return { kind: "pv", tab: t.id, url, x: r.left + (r.width - w) / 2, y: r.top + pad, w, h: r.height - pad * 2 };
+  }
+
+  drop(t: Tab) { this.watched.delete(t.id); void api.unwatchPreview(t.id); }
 }
 
 // ---------- changes ----------
@@ -464,7 +452,7 @@ export class Side {
   private body = h("div.side-body");
   private tabsEl = h("div.legend.l.side-tabs");
   browser = new Browser();
-  preview = new Preview();
+  preview = new Preview(() => this.layout());
   changes = new Changes();
   files = new Files();
   agents = new Agents();
@@ -487,6 +475,27 @@ export class Side {
     app.on("view", () => this.sync());
     app.on("tabs", () => this.sync());
     onTab((t, w) => { if (w === "settled" && t === app.active && this.current === "diff") void this.changes.show(t); });
+    // the pane webviews are native and sit on top of everything, so they follow the layout and get out
+    // of the way of anything floating
+    new ResizeObserver(() => this.layout()).observe(this.body);
+    addEventListener("resize", () => this.layout());
+    const watch = new MutationObserver(() => this.layout());
+    queueMicrotask(() => { const o = document.getElementById("overlay"); if (o) watch.observe(o, { childList: true }); });
+    watch.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  private raf = 0;
+  layout() {
+    if (this.raf) return;
+    this.raf = requestAnimationFrame(() => {
+      this.raf = 0;
+      const t = app.view === "chat" ? app.active : null;
+      const covered = !!document.querySelector("#overlay .scrim, #overlay .ctx-menu");
+      const slots: WebSlot[] = [];
+      if (t && !covered && this.current === "browser") { const s = this.browser.slot(t); if (s) slots.push(s); }
+      if (t && !covered && this.current === "preview") { const s = this.preview.slot(t); if (s) slots.push(s); }
+      void api.webLayout(slots).catch((e) => console.error("web layout", e));
+    });
   }
 
   open(t: Tab, kind: string) {
@@ -505,6 +514,7 @@ export class Side {
       p.id === "agents" && this.agents.runningCount() ? h("span.count", String(this.agents.runningCount())) : null)));
     for (const p of [this.browser, this.preview, this.changes, this.files, this.agents, this.terminal]) p.el.classList.remove("on");
     this.current = kind;
+    this.layout();
     if (!t || !kind) return;
     const pane = ({ browser: this.browser, preview: this.preview, diff: this.changes, files: this.files, agents: this.agents, terminal: this.terminal } as Record<string, { el: HTMLElement; show?: (t: Tab) => unknown }>)[kind];
     pane.el.classList.add("on");
@@ -512,5 +522,5 @@ export class Side {
     if (kind === "agents") this.agents.draw();
   }
 
-  drop(t: Tab) { this.browser.drop(t); this.preview.drop(t); this.terminal.drop(t); }
+  drop(t: Tab) { this.browser.drop(t); this.preview.drop(t); this.terminal.drop(t); void api.webClose(t.id); }
 }

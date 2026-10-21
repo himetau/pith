@@ -132,6 +132,8 @@ export class Composer {
     for (const f of files) await this.attachPath(f);
   }
 
+  async addPaths(paths: string[]) { for (const p of paths) await this.attachPath(p); this.focus(); }
+
   private async attachPath(p: string) {
     const r = await api.read(p);
     if (r.kind === "image") this.addImage({ data: r.data, mimeType: r.mimeType });

@@ -1,4 +1,7 @@
-// Types for what preload exposes as window.pith, and the pi shapes the ui reads
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+// The backend as the views see it (tauri commands and events), and the pi shapes the ui reads
 export type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens?: number; cost?: { total: number } };
 export type Model = { id: string; name?: string; provider: string; reasoning?: boolean; input?: string[]; contextWindow?: number; maxTokens?: number; cost?: { input: number; output: number; cacheRead: number; cacheWrite: number } };
@@ -21,6 +24,7 @@ export type GitStatus = { repo: false } | { repo: true; branch: string; files: {
 export type AgentDef = { name: string; description: string; tools: string; model: string; file: string; scope: "user" | "project"; body: string };
 
 type Fn<A extends unknown[], R> = (...a: A) => Promise<R>;
+export type WebSlot = { kind: "web" | "pv"; tab: string; url?: string; x: number; y: number; w: number; h: number };
 export type Api = {
   start: Fn<[o: { tab: string; cwd: string; session?: string; kind?: string; model?: string; thinking?: string; mode?: string; name?: string }], { ok: boolean; state?: PiState; error?: string; pid?: number }>;
   cmd: Fn<[tab: string, cmd: Rec], Resp>;
@@ -47,14 +51,13 @@ export type Api = {
   pickFiles: Fn<[], string[]>;
   watchPreview: Fn<[tab: string, path: string], void>;
   unwatchPreview: Fn<[tab: string], void>;
-  attachBrowser: Fn<[tab: string, wcId: number], void>;
   agentDefs: Fn<[cwd?: string], AgentDef[]>;
   saveAgent: Fn<[def: Partial<AgentDef>, cwd?: string, scope?: string], string>;
   agentHub: Fn<[], any>;
   images: Fn<[], { file: string; mtime: number; prompt: string }[]>;
   generateImage: Fn<[prompt: string, inputs?: { data: string; mimeType: string }[]], { files: string[]; images: { data: string; mimeType: string }[]; text: string }>;
   openExternal: Fn<[url: string], void>;
-  openPath: Fn<[p: string], string>;
+  openPath: Fn<[p: string], void>;
   reveal: Fn<[p: string], void>;
   copy: Fn<[t: string], void>;
   copyImage: Fn<[data: string], void>;
@@ -64,11 +67,52 @@ export type Api = {
   termWrite: Fn<[id: string, data: string], void>;
   termResize: Fn<[id: string, cols: number, rows: number], void>;
   termClose: Fn<[id: string], void>;
+  webLayout: Fn<[slots: WebSlot[]], void>;
+  webNavigate: Fn<[tab: string, url: string], void>;
+  webGo: Fn<[kind: "web" | "pv", tab: string, what: "back" | "forward" | "reload"], void>;
+  webUrl: Fn<[kind: "web" | "pv", tab: string], string>;
+  webEval: Fn<[kind: "web" | "pv", tab: string, js: string], void>;
+  webClose: Fn<[tab: string], void>;
   minimize: Fn<[], void>;
   maximize: Fn<[], void>;
   close: Fn<[], void>;
+  // a file the ui can put in an <img>, through tauri's asset protocol
+  fileSrc(path: string): string;
   on(ch: string, fn: (...a: any[]) => void): () => void;
+  onDrop(fn: (paths: string[]) => void): void;
 };
 
-declare global { interface Window { pith: Api } }
-export const api = window.pith;
+// tauri commands take named arguments; this keeps the positional api the views were written against
+const call = <R,>(cmd: string, names: string[] = []) => (...a: unknown[]): Promise<R> => {
+  const args: Record<string, unknown> = {};
+  names.forEach((n, i) => { if (a[i] !== undefined) args[n] = a[i]; });
+  return invoke<R>(cmd, args);
+};
+
+export const api: Api = {
+  start: call("pi_start", ["o"]), cmd: call("pi_cmd", ["tab", "cmd"]), ui: call("pi_ui", ["tab", "id", "payload"]), stop: call("pi_stop", ["tab"]),
+  setMode: call("pi_mode", ["tab", "mode"]), live: call("pi_live"),
+  sessions: call("sessions_list"), trashSession: call("sessions_trash", ["file"]), meta: call("meta_all"), setMeta: call("meta_set", ["file", "patch"]), usage: call("usage_get"),
+  settings: call("settings_get"), saveSettings: call("settings_set", ["patch"]), sys: call("sys_info"),
+  gitStatus: call("git_status", ["cwd"]), gitDiff: call("git_diff", ["cwd", "file", "untracked"]), gitBranch: call("git_branch", ["cwd"]),
+  listFiles: call("fs_list", ["cwd"]), read: call("fs_read", ["path"]), write: call("fs_write", ["path", "text"]), exists: call("fs_exists", ["path"]),
+  pickDir: call("fs_pick_dir", ["def"]), pickFiles: call("fs_pick_files"),
+  watchPreview: call("preview_watch", ["tab", "path"]), unwatchPreview: call("preview_unwatch", ["tab"]),
+  agentDefs: call("agents_defs", ["cwd"]), saveAgent: call("agents_save", ["def", "cwd", "scope"]), agentHub: call("agents_hub"),
+  images: call("images_list"), generateImage: call("images_generate", ["prompt", "inputs"]),
+  openExternal: call("open_external", ["url"]), openPath: call("open_path", ["path"]), reveal: call("open_reveal", ["path"]),
+  copy: call("clip_write", ["text"]), copyImage: call("clip_image", ["data"]), notify: call("notify", ["title", "body"]), focused: call("win_focused"),
+  termOpen: call("term_open", ["id", "cwd", "cols", "rows"]), termWrite: call("term_write", ["id", "data"]), termResize: call("term_resize", ["id", "cols", "rows"]), termClose: call("term_close", ["id"]),
+  webLayout: call("web_layout", ["slots"]), webNavigate: call("web_navigate", ["tab", "url"]), webGo: call("web_go", ["kind", "tab", "what"]),
+  webUrl: call("web_url", ["kind", "tab"]), webEval: call("web_eval", ["kind", "tab", "js"]), webClose: call("web_close", ["tab"]),
+  minimize: call("win_minimize"), maximize: call("win_maximize"), close: call("win_close"),
+  fileSrc: (p) => convertFileSrc(p),
+  // events carry their arguments as an array, same order the electron build sent them in
+  on(ch, fn) {
+    const off = listen<unknown>(ch, (e) => (Array.isArray(e.payload) ? fn(...e.payload) : fn(e.payload)));
+    return () => { void off.then((u) => u()); };
+  },
+  onDrop(fn) {
+    void getCurrentWebview().onDragDropEvent((e) => { if (e.payload.type === "drop") fn(e.payload.paths); });
+  },
+};

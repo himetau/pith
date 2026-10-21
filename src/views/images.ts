@@ -56,7 +56,7 @@ export class ImagesPage {
     const list = await api.images();
     const pending = Array.from({ length: this.busy }, () => h("div.im-card.wait", h("div.im-ph", h("span", { "data-spin": "" }), " painting")));
     swap(this.grid, pending, list.map((x) => h("div.im-card",
-      h("img", { src: `file://${x.file}`, loading: "lazy", onclick: () => act.lightbox(`file://${x.file}`, x.prompt.split("\n")[0]) }),
+      h("img", { src: api.fileSrc(x.file), loading: "lazy", onclick: () => act.lightbox(api.fileSrc(x.file), x.prompt.split("\n")[0]) }),
       h("div.im-meta",
         h("div.im-p", x.prompt.split("\n")[0] || tilde(x.file)),
         h("div.im-acts", h("span.dim", ago(x.mtime)), h("span.grow"),

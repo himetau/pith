@@ -1,0 +1,171 @@
+// The browser and preview panes are real webviews laid over the side window, one each per session.
+// The ui tells us where its pane is (web_layout) and everything not in that list gets hidden.
+// JS results and screenshots go through WebKitGTK directly, Tauri's eval can't return anything
+use serde::Deserialize;
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use tauri::webview::{NewWindowResponse, PageLoadEvent};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl};
+
+static LOADING: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+static REQUESTED: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+fn set_loading(label: &str, v: bool) { LOADING.lock().unwrap().get_or_insert_with(HashMap::new).insert(label.into(), v); }
+fn is_loading(label: &str) -> bool { LOADING.lock().unwrap().as_ref().and_then(|m| m.get(label).copied()).unwrap_or(false) }
+
+pub fn label(kind: &str, tab: &str) -> String { format!("{kind}-{tab}") }
+fn tab_of(label: &str) -> String { label.split_once('-').map(|(_, t)| t.to_string()).unwrap_or_default() }
+
+// the preview's comment mode. picks go back through the document title, which tauri reports for any page
+const PICKER: &str = r#"
+(() => {
+  let on = false, box = null, tag = null, hovered = null;
+  const sel = (el) => { const parts = []; for (let e = el; e && e !== document.body && parts.length < 5; e = e.parentElement) {
+      if (e.id) { parts.unshift('#' + CSS.escape(e.id)); break; }
+      let s = e.tagName.toLowerCase(); const cls = [...e.classList].slice(0, 2); if (cls.length) s += '.' + cls.map(CSS.escape).join('.');
+      const sib = e.parentElement ? [...e.parentElement.children].filter((c) => c.tagName === e.tagName) : []; if (sib.length > 1) s += ':nth-of-type(' + (sib.indexOf(e) + 1) + ')';
+      parts.unshift(s); } return parts.join(' > '); };
+  const make = () => { if (box) return; box = document.createElement('div'); box.style.cssText = 'position:fixed;z-index:2147483646;pointer-events:none;outline:2px solid #f0c;outline-offset:-1px;background:rgba(255,0,204,.08);display:none';
+    tag = document.createElement('div'); tag.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;font:11px/1.6 ui-monospace,monospace;padding:0 6px;background:#f0c;color:#fff;border-radius:3px;display:none;white-space:nowrap;max-width:60vw;overflow:hidden;text-overflow:ellipsis';
+    document.documentElement.append(box, tag); };
+  const paint = (el) => { if (!box) return; if (!el) { box.style.display = tag.style.display = 'none'; return; } const r = el.getBoundingClientRect();
+    Object.assign(box.style, { display: 'block', left: r.left + 'px', top: r.top + 'px', width: r.width + 'px', height: r.height + 'px' });
+    tag.textContent = sel(el); Object.assign(tag.style, { display: 'block', left: Math.max(0, r.left) + 'px', top: (r.top > 22 ? r.top - 22 : r.bottom + 2) + 'px' }); };
+  const send = (t) => { const was = document.title; document.title = t; setTimeout(() => { document.title = was; }, 30); };
+  const move = (e) => { hovered = e.target; paint(hovered); };
+  const click = (e) => { e.preventDefault(); e.stopPropagation(); const el = e.target; const html = el.outerHTML.length > 700 ? el.outerHTML.slice(0, 700) + '…' : el.outerHTML;
+    send('pith-pick:' + JSON.stringify({ selector: sel(el), html, text: (el.innerText || '').slice(0, 200) })); };
+  const key = (e) => { if (e.key === 'Escape') { window.__pithPick(false); send('pith-pick-off'); } };
+  window.__pithPick = (v) => { on = v; make(); const o = { capture: true };
+    if (on) { addEventListener('mousemove', move, o); addEventListener('click', click, o); addEventListener('keydown', key, o); }
+    else { removeEventListener('mousemove', move, o); removeEventListener('click', click, o); removeEventListener('keydown', key, o); paint(null); } };
+  addEventListener('scroll', () => { if (on) paint(hovered); }, true);
+})();
+"#;
+
+pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webview, String> {
+    let l = label(kind, tab);
+    if let Some(w) = app.get_webview(&l) { return Ok(w); }
+    let win = app.get_window("main").ok_or("no main window")?;
+    let parsed: Url = url.parse().map_err(|e| format!("bad url {url}: {e}"))?;
+    let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
+    let (l1, l2) = (l.clone(), l.clone());
+    let is_web = kind == "web";
+    let mut b = WebviewBuilder::new(&l, WebviewUrl::External(parsed.clone()))
+        .on_page_load(move |wv, p| {
+            let label = wv.label().to_string();
+            set_loading(&label, matches!(p.event(), PageLoadEvent::Started));
+            if is_web { let _ = a1.emit("browser:url", json!([tab_of(&label), p.url().as_str()])); }
+            else if matches!(p.event(), PageLoadEvent::Finished) { let _ = a1.emit("preview:loaded", json!([tab_of(&label)])); }
+        })
+        // popups and target=_blank open in the same pane
+        .on_new_window(move |url, _| {
+            if let Some(w) = a2.get_webview(&l1) { set_loading(&l1, true); let _ = w.navigate(url); }
+            NewWindowResponse::Deny
+        });
+    if !is_web {
+        b = b.initialization_script(PICKER).on_document_title_changed(move |_wv, title| {
+            if let Some(j) = title.strip_prefix("pith-pick:") {
+                if let Ok(v) = serde_json::from_str::<Value>(j) { let _ = a3.emit("preview:pick", json!([tab_of(&l2), v])); }
+            } else if title == "pith-pick-off" { let _ = a3.emit("preview:pick-off", json!([tab_of(&l2)])); }
+        });
+    }
+    set_loading(&l, true);
+    REQUESTED.lock().unwrap().get_or_insert_with(HashMap::new).insert(l.clone(), url.into());
+    let wv = win.add_child(b, LogicalPosition::new(-20000.0, 0.0), LogicalSize::new(1100.0, 760.0)).map_err(|e| e.to_string())?;
+    let _ = wv.hide();
+    Ok(wv)
+}
+
+#[derive(Deserialize)]
+pub struct Slot { kind: String, tab: String, url: Option<String>, x: f64, y: f64, w: f64, h: f64 }
+
+// show exactly these, hide every other pane webview
+pub fn layout(app: &AppHandle, slots: Vec<Slot>, home: &str) -> Result<(), String> {
+    let mut keep = vec![];
+    for s in slots {
+        let url = s.url.clone().unwrap_or_else(|| home.to_string());
+        let wv = ensure(app, &s.kind, &s.tab, &url)?;
+        let l = label(&s.kind, &s.tab);
+        // the preview follows whatever file the session last pointed it at
+        if let Some(u) = &s.url {
+            let mut req = REQUESTED.lock().unwrap();
+            let m = req.get_or_insert_with(HashMap::new);
+            if m.get(&l) != Some(u) {
+                m.insert(l.clone(), u.clone());
+                if let Ok(parsed) = u.parse::<Url>() { set_loading(&l, true); let _ = wv.navigate(parsed); }
+            }
+        }
+        let _ = wv.set_position(LogicalPosition::new(s.x, s.y));
+        let _ = wv.set_size(LogicalSize::new(s.w.max(1.0), s.h.max(1.0)));
+        let _ = wv.show();
+        keep.push(l);
+    }
+    for (l, wv) in app.webviews() {
+        if l == "main" || keep.contains(&l) { continue; }
+        let _ = wv.hide();
+    }
+    Ok(())
+}
+
+pub fn close_tab(app: &AppHandle, tab: &str) {
+    for k in ["web", "pv"] { if let Some(w) = app.get_webview(&label(k, tab)) { let _ = w.close(); } }
+}
+
+pub async fn wait_loaded(label: &str, max: Duration) {
+    let end = Instant::now() + max;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    while is_loading(label) && Instant::now() < end { tokio::time::sleep(Duration::from_millis(100)).await; }
+    tokio::time::sleep(Duration::from_millis(120)).await;
+}
+pub fn mark_loading(label: &str) { set_loading(label, true); }
+
+// runs `body` as an async function in the page and hands back its return value as json. the result is
+// parked on window and collected with tauri's eval_with_callback, which only sees synchronous values
+pub async fn eval_json(app: &AppHandle, label: &str, body: &str) -> Result<Value, String> {
+    use rand::Rng;
+    let wv = app.get_webview(label).ok_or_else(|| format!("no webview {label}"))?;
+    let id: String = rand::rng().sample_iter(rand::distr::Alphanumeric).take(12).map(char::from).collect();
+    let run = format!(r#"(() => {{ const box = (window.__pithEval ||= {{}}); const k = "{id}";
+      (async () => {{ {body}
+      }})().then((v) => {{ box[k] = JSON.stringify({{ ok: true, v: v === undefined ? null : v }}); }},
+                 (e) => {{ box[k] = JSON.stringify({{ ok: false, e: String((e && e.message) || e) }}); }});
+      return 1; }})()"#);
+    wv.eval(run).map_err(|e| e.to_string())?;
+    let take = format!(r#"(() => {{ const box = window.__pithEval || {{}}; const r = box["{id}"]; if (r !== undefined) delete box["{id}"]; return r === undefined ? null : r; }})()"#);
+    let end = Instant::now() + Duration::from_secs(40);
+    loop {
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        let tx = Mutex::new(Some(tx));
+        wv.eval_with_callback(take.clone(), move |r| { if let Some(t) = tx.lock().unwrap().take() { let _ = t.send(r); } }).map_err(|e| e.to_string())?;
+        let raw = tokio::time::timeout(Duration::from_secs(5), rx).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+        // the callback gets the json of what the expression returned: our json string, or null
+        if let Ok(Value::String(inner)) = serde_json::from_str::<Value>(&raw) {
+            let out: Value = serde_json::from_str(&inner).map_err(|e| e.to_string())?;
+            return if out["ok"] == true { Ok(out["v"].clone()) } else { Err(out["e"].as_str().unwrap_or("script failed").to_string()) };
+        }
+        if Instant::now() > end { return Err("the page didn't answer".into()); }
+        tokio::time::sleep(Duration::from_millis(40)).await;
+    }
+}
+
+// png of what the webview shows
+pub async fn snapshot(app: &AppHandle, label: &str) -> Result<Vec<u8>, String> {
+    let wv = app.get_webview(label).ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
+    wv.with_webview(move |pv| {
+        use webkit2gtk::WebViewExt;
+        pv.inner().snapshot(webkit2gtk::SnapshotRegion::Visible, webkit2gtk::SnapshotOptions::NONE, None::<&webkit2gtk::gio::Cancellable>, move |res| {
+            let out = res.map_err(|e| e.message().to_string()).and_then(|surface| {
+                let img = cairo::ImageSurface::try_from(surface).map_err(|_| "snapshot wasn't an image".to_string())?;
+                let mut png = vec![];
+                img.write_to_png(&mut png).map_err(|e| e.to_string())?;
+                Ok(png)
+            });
+            let _ = tx.send(out);
+        });
+    }).map_err(|e| e.to_string())?;
+    tokio::time::timeout(Duration::from_secs(15), rx).await.map_err(|_| "screenshot timed out".to_string())?.map_err(|_| "webview went away".to_string())?
+}

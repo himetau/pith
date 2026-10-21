@@ -14,18 +14,12 @@
 .pe-t { color: var(--text); }
 
 .wv-host, .pv-stage { flex: 1; min-height: 0; position: relative; background: var(--surface-low); }
-.wv-host webview { position: absolute; inset: 0; visibility: hidden; }
-.wv-host webview.on { visibility: visible; }
-.wv-host webview.loading { opacity: .97; }
-.wv-host webview.driving.on { outline: 2px solid var(--primary); outline-offset: -2px; }
+.wv-host.driving { box-shadow: inset 0 0 0 2px var(--primary); }
 .agent-badge { display: none; align-items: center; gap: 4px; padding: 0 8px; height: 22px; border-radius: 11px; background: var(--primary); color: var(--on-primary); font-size: .82em; white-space: nowrap; }
 .agent-badge.on { display: inline-flex; }
 
 .pv-stage { display: flex; justify-content: center; overflow: auto; }
-.pv-stage webview { display: none; height: 100%; background: white; }
-.pv-stage webview.on { display: flex; }
 .pv-stage.framed { padding: 14px; background: repeating-linear-gradient(45deg, var(--surface-low) 0 8px, var(--bg) 8px 16px); }
-.pv-stage.framed webview.on { border-radius: var(--r2); box-shadow: 0 0 0 1px var(--line), 0 10px 30px rgb(0 0 0 / .3); }
 .pv-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mid); padding-left: 4px; }
 .pv-vps { display: flex; }
 .preview .pane-empty { position: absolute; inset: 48px 0 0; background: var(--bg); }

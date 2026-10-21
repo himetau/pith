@@ -173,6 +173,10 @@ function mount() {
     if (inChat && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && e.target === document.body) chatFor(t!).composer.focus();
   });
 
+  api.onDrop((paths) => {
+    const t = app.view === "chat" ? app.active : null;
+    void (t ? chatFor(t).composer : homeView.composer).addPaths(paths);
+  });
   addEventListener("dragover", (e) => e.preventDefault());
   addEventListener("drop", (e) => e.preventDefault());
 
@@ -183,7 +187,7 @@ function mount() {
   render();
   side.sync();
   // handle for poking at it from devtools
-  (window as unknown as { pith_: unknown }).pith_ = { app, act, chatFor };
+  (window as unknown as { pith_: unknown }).pith_ = { app, act, chatFor, api };
 }
 
 async function rename(t: Tab) {
