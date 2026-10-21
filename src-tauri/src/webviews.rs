@@ -82,6 +82,7 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
     let _ = wv.with_webview(move |pv| {
         use gtk::prelude::*;
         use webkit2gtk::{SettingsExt, WebViewExt};
+        native_refresh(&pv.inner());
         if !is_web {
             if let Some(s) = WebViewExt::settings(&pv.inner()) {
                 s.set_allow_file_access_from_file_urls(true);
@@ -114,6 +115,35 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
         }
     });
     Ok(wv)
+}
+
+// webkit holds page rendering to ~60fps even on faster screens (PreferPageRenderingUpdatesNear60FPS, on by default).
+// that caps scrolling and animation at 60 on a 180hz monitor, so every webview pith makes turns it off.
+// the gtk bindings don't wrap webkit's feature api, so it's called straight from the library they link
+pub fn native_refresh(view: &webkit2gtk::WebView) {
+    use gtk::glib::object::ObjectType;
+    use std::ffi::{c_char, c_void, CStr};
+    extern "C" {
+        fn webkit_settings_get_all_features() -> *mut c_void;
+        fn webkit_feature_list_get_length(list: *mut c_void) -> usize;
+        fn webkit_feature_list_get(list: *mut c_void, index: usize) -> *mut c_void;
+        fn webkit_feature_list_unref(list: *mut c_void);
+        fn webkit_feature_get_identifier(feature: *mut c_void) -> *const c_char;
+        fn webkit_settings_set_feature_enabled(settings: *mut c_void, feature: *mut c_void, enabled: i32);
+    }
+    let Some(settings) = webkit2gtk::WebViewExt::settings(view) else { return };
+    unsafe {
+        let list = webkit_settings_get_all_features();
+        if list.is_null() { return; }
+        for i in 0..webkit_feature_list_get_length(list) {
+            let f = webkit_feature_list_get(list, i);
+            let id = webkit_feature_get_identifier(f);
+            if !id.is_null() && CStr::from_ptr(id).to_bytes() == b"PreferPageRenderingUpdatesNear60FPS" {
+                webkit_settings_set_feature_enabled(settings.as_ptr() as *mut c_void, f, 0);
+            }
+        }
+        webkit_feature_list_unref(list);
+    }
 }
 
 fn place(wv: &Webview, x: f64, y: f64, w: f64, h: f64) {

@@ -382,7 +382,8 @@ pub fn run() {
                 .title("pith").inner_size(1480.0, 940.0).min_inner_size(760.0, 480.0).decorations(false).visible(!hidden)
                 .build()?;
             let size = win.inner_size()?.to_logical::<f64>(win.scale_factor()?);
-            win.add_child(WebviewBuilder::new("main", WebviewUrl::App("index.html".into())).auto_resize(), LogicalPosition::new(0.0, 0.0), size)?;
+            let main = win.add_child(WebviewBuilder::new("main", WebviewUrl::App("index.html".into())).auto_resize(), LogicalPosition::new(0.0, 0.0), size)?;
+            let _ = main.with_webview(|pv| webviews::native_refresh(&pv.inner()));
 
             let ht = h.clone();
             watch_dir(sys::config_dir(), |f| f == "colors.css", move || { let _ = ht.emit("theme", sys::read_theme()); });

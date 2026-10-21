@@ -35,6 +35,7 @@ PSS counts shared libraries once, so it's the honest number: the win is small, t
 - `/design` and the design session prompt work from a brief (what, headline, direction, the one detail), build a full site or a working app screen, then screenshot it in the browser and fix it. A run is pricey (~$0.80 for a landing page) because of the screenshot loop.
 - composer at non-1 scales: `overflow-x: hidden` (webkit's zoom overstates textarea width), a vertical scrollbar only at max height, and it re-autosizes when its width changes.
 - clicking "working" opens the run's steps (`runSteps` in `chat.ts`): every thinking stretch, tool call and reply since the last prompt, then a live tail of the thinking or the running tool's output.
+- 180hz: webkit's `PreferPageRenderingUpdatesNear60FPS` feature (on by default) held pages to ~60fps on the user's 180hz monitor. `webviews::native_refresh` turns it off for every webview, through webkit's C feature api since the gtk bindings don't wrap it. `WEBKIT_DRAW_FPS=1` draws the compositor's real fps (scrolling included) on screen; that's what showed 60-40 before.
 - ctrl+shift+f shows an fps readout (`fps.ts`). WebKitGTK 2.54 drives frames off DRM vblank of the output it matches to the window (by physical mm, refresh from the GdkMonitor) and rechecks when the window moves, so it should run at the monitor's rate; this is how to check.
 - voxel icon: `packaging/voxel-icon.py` renders it at any size; the install script renders each hicolor size on its own.
 
