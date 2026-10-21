@@ -6,20 +6,22 @@ Colours come from matugen and follow your wallpaper live. The font is whatever k
 
 ## Running it
 
+It's a Tauri app: Rust and the system WebKitGTK, no bundled Chromium. You need a Rust toolchain and webkit2gtk-4.1.
+
 ```sh
 npm install
-npm start
+npm run dev
 ```
 
-`npm start` builds and opens it. pi has to be on your PATH (or set its path in settings), and python3 for the terminal pane. To get it in quickshell's launcher (and rofi, anything that reads .desktop files):
+pi has to be on your PATH (or set its path in settings). To get it in quickshell's launcher (and rofi, anything that reads .desktop files):
 
 ```sh
-scripts/install-desktop.sh
+npm run install-desktop
 ```
 
-That installs the icon into the hicolor theme and an entry that runs this repo's build, so after `npm run build` the launcher opens the new one. Pass `--appimage` to have it run `release/pith.AppImage` instead.
+That makes a release build, copies it to `~/.local/lib/pith` with the extension and prompts next to it, renders the icon into the hicolor theme and writes the .desktop entry. Run it again to update. The copy means switching branches in here doesn't break the launcher.
 
-`npm run dist` makes an AppImage in `release/` instead, if you'd rather not run it from the repo.
+`npm run build` makes an AppImage and a .deb in `src-tauri/target/release/bundle/`.
 
 ## What's in it
 
@@ -31,7 +33,7 @@ That installs the icon into the hicolor theme and an entry that runs this repo's
 - **web**: a real browser per session. The agent drives it through a `browser` tool (navigate, snapshot, click, type, screenshot, eval) while you watch, and you can take over.
 - **preview**: shows html the agent makes and reloads when the file changes. Phone and tablet widths. Turn on *comment* and click an element to quote it into the chat.
 - **changes**: git status and diffs for the session's folder, with review and security review buttons.
-- **files** and **agents**: a file viewer, and live subagents from your subagent extension.
+- **files** and **agents**: a file viewer, and the subagents from your subagent extension: running ones, and failures from the last 15 minutes. Click one to open its session, live while it runs; once it's done you can type in it to carry on yourself. A run that dies on its own (provider error, crash) gets resumed on the same session up to 3 times (`PI_SUBAGENT_AUTO_CONTINUE=0` turns that off).
 - **term**: a real shell per session, started in its folder and coloured from matugen. Select output and hit *to chat* to quote it.
 - `/review`, `/security-review`, `/simplify`, `/design`, `/explain`, `/init` ship with the app (`prompts/commands`). Reviews come back as cards ranked by severity, each linking to the line.
 - Design sessions (ctrl+shift+n) start in your design folder with the preview open and a prompt that pushes for work that doesn't look templated.
@@ -41,9 +43,9 @@ That installs the icon into the hicolor theme and an entry that runs this repo's
 
 ## How it hangs together
 
-`electron/` is the main process: one `PiProc` per session, the session scanner, and a loopback server that `ext/pith-bridge.ts` talks to. That extension is loaded into every pi pith starts (`-e`). It adds the browser, preview, ask_user, todo_write, report_findings and generate_image tools, and asks the app before edits and commands. Outside pith it does nothing.
+`src-tauri/` is the backend: one pi rpc process per session (`pi.rs`), the session scanner (`sessions.rs`), and a loopback server (`bridge.rs`) that `ext/pith-bridge.ts` talks to. That extension is loaded into every pi pith starts (`-e`). It adds the browser, preview, ask_user, todo_write, report_findings and generate_image tools, and asks the app before edits and commands. Outside pith it does nothing.
 
-`electron/shell-pty.py` gives the terminal pane a pty with nothing but python's standard library, so there's no native module to rebuild for every electron.
+The browser and preview panes are native WebKit views laid over the side pane (`webviews.rs`, `browser.rs`), so they hide whenever something floats over them. The terminal is portable-pty (`term.rs`).
 
 `src/` is the ui, plain TypeScript and DOM. `tab.ts` turns pi's event stream into a transcript, `views/` and `panes.ts` draw it.
 
@@ -56,4 +58,4 @@ ctrl+n new session · ctrl+shift+n new design · ctrl+k commands · ctrl+p find 
 ## Not there yet
 
 - Budgets are yours to set. pi has no way to ask a provider for plan limits.
-- Only a Linux AppImage gets built.
+- Linux only: AppImage and .deb.

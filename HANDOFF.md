@@ -1,77 +1,51 @@
 # handoff: the tauri port (branch `tauri`)
 
-`main` is the working Electron build (commit 14b0ec8 and before). This branch ports it to Tauri 2 so it stops shipping Chromium: Electron idles at ~765 MB before any pi session is open. The UI (`src/`) is the same code; the backend is new Rust in `src-tauri/`.
+`main` is the old Electron build. This branch is pith on Tauri 2: Rust in `src-tauri/`, the same ui in `src/`, the system WebKitGTK instead of a bundled Chromium. Electron is gone from this branch.
 
-## Where it stands
+The launcher runs the Tauri build now: `npm run install-desktop` builds a release binary and copies it to `~/.local/lib/pith/` with `ext/` and `prompts/` beside it, so switching branches in the repo doesn't touch it.
 
-Builds and typechecks clean (`cd src-tauri && cargo build`, `npx tsc --noEmit`). It launches, and the home screen renders right: font, matugen colours, hyprland borders and legends. Nothing past that has been checked in the Tauri build yet.
+## What was wrong, and is fixed
+- **eval into webviews never ran, and it idled hot.** `watch_dir` in `lib.rs` fired on every notify event, Access included, and the handler reads the file it watches, so it fed itself and starved the main thread. Only Create/Modify count now. Idle on a real (headless sway) Wayland session: ~0.7% CPU total.
+- child webviews: tauri's `add_child` packs into a vertical GtkBox on linux and ignores position/size, so `webviews.rs` moves them into a GtkOverlay over the main webview and places them through `get-child-position`.
+- sidebar showing too few sessions: `read_to_string` failed on non-UTF-8 files; it reads lossily now. It matches what's on disk.
+- composer focus ring: `:focus-visible` only outlines buttons now.
+- terminal stayed visible over other panes: `.term-box.on` set `visibility: visible`, which beats the hidden pane. It only turns on inside `.pane.on`.
+- the installed copy fell back to the repo's `ext/`: tauri's `resource_dir` isn't the exe's folder for a plain binary, so setup checks next to the exe too.
 
-### Done
-- `src-tauri/src/`
-  - `pi.rs`: pi rpc processes, JSONL, responses matched by id
-  - `sessions.rs`: session scan and usage report, ported from `electron/sessions.ts`
-  - `sys.rs`: settings, theme, kitty font, hyprctl, git, files, agents, hub, images, per-session meta
-  - `bridge.rs`: tiny_http loopback server, same protocol as before, so `ext/pith-bridge.ts` didn't change
-  - `term.rs`: portable-pty, which replaces `electron/shell-pty.py`
-  - `imagegen.rs`: the images page's generator
-  - `webviews.rs` + `browser.rs`: the browser and preview panes are native child webviews (`window.add_child`, needs tauri's `unstable` feature) laid over the side pane
-  - `lib.rs`: every command and the window setup
-- `src/lib/api.ts` is now a Tauri adapter with the same `Api` shape as the old preload, so the views barely changed.
-- The panes report their rect with `api.webLayout(slots)`: `Side.layout()` in `src/panes.ts`. Anything not in the list gets hidden, and so does everything while an overlay (palette, menu, dialog) is open, because native webviews sit on top of HTML.
-- Preview element picks come back through the page title (`pith-pick:{json}` caught by `on_document_title_changed`), so no IPC is needed in pages we don't own.
+## Checked in the Tauri build (Xvfb harness + headless sway)
+pi sessions end to end, the question card, the browser tool (navigate, snapshot, click; also on github.com, strict CSP), preview with live reload, terminal, the agents pane, `npx tauri build` (AppImage 103 MB, .deb 4.3 MB), Wayland app_id is `pith`.
 
-### Blocking bug: JS evaluation into webviews never comes back
-`eval_json` in `webviews.rs` is how the agent's browser tool and the dev harness run JS in a page. Every way of evaluating was tried against the main webview, and none ever executes or calls back:
-- Tauri `eval()`: `document.body.style.background='red'` changes nothing
-- `eval_with_callback`
-- WebKit's `evaluate_javascript`
-- WebKit's `call_async_javascript_function`
+Not checked, because it would mean touching the real desktop: drag and drop, notifications, the image clipboard.
 
-`with_webview` itself does run: the closure sees uri `tauri://localhost`. Meanwhile IPC from the page works, since the UI loads its sessions through `invoke`.
+## Memory, fresh start, idle, no session open, same headless sway
+| | RSS sum | PSS sum |
+|---|---|---|
+| Electron | 704 MB | 251 MB |
+| Tauri | 496 MB | 234 MB |
 
-Measured: idle, the WebKitWebProcess sits at ~110% CPU and 580–950 MB RSS, and pith's own process at ~260% CPU, with only ~15 `web_layout` calls in 6 s. So it isn't a call flood. Things that made no difference:
-- CSP set to null
-- `WEBKIT_DISABLE_COMPOSITING_MODE=1`
+PSS counts shared libraries once, so it's the honest number: the win is small, the WebKit web process alone is ~115 MB PSS. The bigger difference is on disk (9.3 MB binary vs 284 MB unpacked Electron).
 
-Everything so far ran under Xvfb (`GDK_BACKEND=x11`, software GL, "MESA-EGL DRI3 error" in the log), so first rule out the test display:
-1. Run `target/debug/pith` normally on Wayland and watch `ps` CPU for the pith process and its WebKitWebProcess. If it idles quietly there, Xvfb was the problem; test on the real display (or a headless sway).
-2. If it still spins, find what's hot: `perf top -p <pid>`, or `gdb -p <pid>` then `thread apply all bt`. Main-thread starvation would explain both the CPU and the eval callbacks never being dispatched. Suspects:
-   - the resize loop between `auto_resize()` on the main webview and the child webviews
-   - the `notify` watchers in `lib.rs` (`watch_dir`, `dev_control`)
-   - the ResizeObserver/MutationObserver pair in `Side`
-3. Once evaluation works, check that `eval_json`'s park-on-window-and-poll trick works on other sites' pages (strict CSP sites such as github.com). The browser tool depends on it.
+## Added on this branch
+- agents pane: only running agents, and failed or aborted ones from the last 15 minutes (a kill by the user doesn't count). Failures can be dismissed. Click one to open its session as a tab: read straight off disk while it runs (`agents_session` in `sys.rs`, `Tab.watch`/`peek()`), and a normal session you can type in once it's done.
+- markdown in replies is coloured like opencode: headings, bold, italics, inline code and list markers each get a theme accent (`--md-*` in `base.css`), quieter inside thinking.
+- the sidebar only moves a session to the top when you send in it, not when you open it (`Tab.sent`).
+- voxel icon: `packaging/voxel-icon.py` renders it at any size; the install script renders each hicolor size on its own.
 
-### Also found, not fixed
-- The sidebar showed 1 of 5 sessions in the Tauri build. Probably a bug in `sessions.rs` `scan()`/`parse()`: check `read_to_string` on non-UTF-8, `parse_iso`, and the cache retain. The Electron build lists all 5.
-- WebKit draws a focus ring on the composer textarea (`:focus-visible` in `src/styles/base.css`). Turn it off for `.ta`, `.sb-search`, `.pk-in`, `.url`.
-
-### Not tested at all yet
-- pi sessions end to end
-- permission and question cards
-- the browser tool (navigate, snapshot, click, type, screenshot via WebKit `snapshot`)
-- preview and its live reload
-- terminal
-- drag and drop (`api.onDrop`)
-- notifications, image clipboard
-- `npx tauri build` (AppImage and deb; resources map `../ext` → `ext`, `../prompts` → `prompts`)
-- the Wayland app_id for `StartupWMClass` (`glib::set_prgname("pith")` is set, unverified)
-
-### After it works
-- Delete `electron/`, `scripts/build-main.mjs`, the electron and electron-builder deps and the electron `build` block in `package.json`. Add `tauri:dev` / `tauri:build` scripts.
-- Point `scripts/install-desktop.sh` at the Tauri binary, and update the README.
-- Measure idle memory on the real display against Electron's ~765 MB. That was the point of the port.
-- The user asked for a new app icon: **voxel style, not slopped**. Not started. Tauri wants `src-tauri/icons/{32x32,128x128,128x128@2x,icon}.png`; `npx tauri icon <1024px png>` makes the set. Right now those are copies of `packaging/icon.svg`.
+## Outside the repo
+The subagent extension at `~/.pi/agent/extensions/subagent` (not in git) was changed for the agents pane:
+- `runner.ts`: every run keeps a session in `~/.pi/agent/subagent-sessions/` (pruned after 30 days) instead of `--no-session`. A run that fails on its own is resumed on that session with a "pick up where you left off" prompt, up to 3 times with backoff (`PI_SUBAGENT_AUTO_CONTINUE=0` turns it off, a number sets the count). A user abort is never retried.
+- `store.ts`: records carry `sessionFile` and `retries`; `markRetrying()` puts a record back to `spawning` with no pid between attempts, which `read_agent_hub` in `sys.rs` knows not to mark aborted.
 
 ## Testing without opening windows on the user's screen
 ```sh
-cd src-tauri && cargo build && cd ..
+npm run build:ui && (cd src-tauri && cargo build)
 scripts/dev/tauri-run.sh 6                       # debug build on Xvfb :77, control dir enabled
-scripts/dev/ctl.py js "window.pith_.app.view"    # runs an expression in the ui (needs eval to work, see above)
+scripts/dev/ctl.py js "window.pith_.app.view"    # runs an expression in the ui
 import -display :77 -window root /tmp/pith-dev/shot.png
 ```
-`window.pith_` exposes `{ app, act, chatFor, api }` for poking at state. Stop with `kill $(cat /tmp/pith-dev/tauri.pid) $(cat /tmp/pith-dev/xvfb.pid)`.
+`window.pith_` exposes `{ app, act, chatFor, api }`. Set `PI_CODING_AGENT_DIR` to a scratch copy of `~/.pi/agent` (auth.json, models.json, settings.json) so test sessions and agents don't land in the user's lists. For real Wayland without a window on screen: `WLR_BACKENDS=headless WLR_RENDERER=pixman sway -c <config>` and point `WAYLAND_DISPLAY` at its socket.
 
-Be careful with `pkill -f`: it matches your own shell command line. Kill by pid file. And never kill all `pi --mode rpc` processes: the user runs pith themselves, and those are their sessions.
+Kill by pid, and check the pid is yours: `setsid` behind `&&` hands back a wrapper shell's pid, not the app's.
 
 ## Conventions
-Commits are lowercase and casual, in the user's voice. There's no git identity in this environment, so commit with `-c user.name=himetau -c user.email=168368537+himetau@users.noreply.github.com`. Comments are short and lowercase, explaining why, like the rest of the code.
+Commits are lowercase and casual, in the user's voice, with `-c user.name=himetau -c user.email=168368537+himetau@users.noreply.github.com`. Comments are short and lowercase, explaining why.

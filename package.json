@@ -4,16 +4,14 @@
   "private": true,
   "description": "A desktop for pi: sessions, agents, a browser it can drive, design previews, reviews and your usage, themed by matugen.",
   "type": "module",
-  "main": "dist/electron/main.cjs",
   "scripts": {
-    "build:main": "node scripts/build-main.mjs",
     "build:ui": "vite build",
-    "build": "npm run build:main && npm run build:ui",
-    "start": "npm run build && electron .",
-    "dev": "node scripts/build-main.mjs && PITH_DEV=1 electron .",
+    "dev": "npm run build:ui && tauri dev",
+    "build": "tauri build",
+    "app": "tauri build --no-bundle",
+    "install-desktop": "npm run app && scripts/install-desktop.sh",
     "ui:dev": "vite",
-    "typecheck": "tsc --noEmit",
-    "dist": "npm run build && electron-builder --linux --publish never"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4",
@@ -21,72 +19,14 @@
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.17",
-    "electron": "^44.9.3",
-    "electron-builder": "^26.15.3",
-    "esbuild": "^0.28.2",
     "highlight.js": "^11.12.0",
     "marked": "^15.0.12",
     "typescript": "^7.0.2",
     "vite": "^8.3.5"
   },
   "allowScripts": {
-    "esbuild": true,
-    "electron": true,
-    "electron-winstaller": false
+    "esbuild": true
   },
-  "build": {
-    "appId": "com.himetau.pith",
-    "productName": "pith",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "package.json",
-      "dist/electron/*.cjs",
-      "dist/ui/**"
-    ],
-    "extraResources": [
-      {
-        "from": "ext",
-        "to": "ext"
-      },
-      {
-        "from": "prompts",
-        "to": "prompts"
-      },
-      {
-        "from": "electron/shell-pty.py",
-        "to": "shell-pty.py"
-      },
-      {
-        "from": "packaging/icon.png",
-        "to": "icon.png"
-      }
-    ],
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "packaging/icon.png",
-      "category": "Development",
-      "executableName": "pith",
-      "artifactName": "pith.${ext}",
-      "desktop": {
-        "entry": {
-          "Name": "pith",
-          "Comment": "A desktop for pi",
-          "StartupWMClass": "pith"
-        }
-      },
-      "syncDesktopName": true
-    }
-  },
-  "desktopName": "pith.desktop",
   "author": "himetau",
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
