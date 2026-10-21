@@ -202,7 +202,6 @@
 .empty-inner { margin: 14vh 0 0; display: flex; flex-direction: column; gap: 10px; }
 .empty-k { color: var(--dim); font-size: .85em; }
 .empty-cwd { font-size: 1.3em; color: var(--text); }
-.empty-cwd::before { content: "~ "; color: var(--primary); }
 .empty-starters { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .starter { padding: 4px 12px; border: 1px solid var(--line); border-radius: var(--r2); }
 .starter:hover { background: var(--hover); border-color: var(--dim); }

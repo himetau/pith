@@ -161,7 +161,7 @@ export default function (pi: ExtensionAPI) {
       save_to: Type.Optional(Type.String({ description: "folder to save into, defaults to pith's image library" })),
     }),
     async execute(_id, params, _signal, _onUpdate, ctx) {
-      const s = await call<{ model: string; provider: string; dir: string; pi: string }>("image-settings");
+      const s = await call<{ model: string; provider: string; dir: string; pi: string; cost: number }>("image-settings");
       const inputs = (params.images ?? []).map((p) => {
         const file = p.startsWith("~") ? join(homedir(), p.slice(1)) : isAbsolute(p) ? p : resolve(ctx.cwd, p);
         const ext = file.split(".").pop()!.toLowerCase();
@@ -172,6 +172,11 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [text(`saved ${r.files.join(", ")}${r.text ? `\n${r.text}` : ""}`), ...r.images.map((im) => ({ type: "image" as const, ...im }))],
         details: { files: r.files, model: s.model },
+        // a model call made by the tool: pi adds this to the session's tokens and cost
+        usage: {
+          input: r.usage?.input ?? 0, output: r.usage?.output ?? 0, cacheRead: 0, cacheWrite: 0, totalTokens: (r.usage?.input ?? 0) + (r.usage?.output ?? 0),
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: (s.cost || 0) * r.files.length },
+        },
       };
     },
   });

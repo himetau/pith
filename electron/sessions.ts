@@ -1,6 +1,6 @@
 // Reads pi's session files straight off disk: the sidebar list and every number on the usage page.
 // Parsed once per file and kept until its size or mtime changes
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -130,6 +130,17 @@ export function sessionSpend(file: string): Spend[] {
   return cache.get(file)?.spend ?? [];
 }
 
+// spend outside pi sessions (the images page), one Spend row per line
+const pithData = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), "pith");
+const spendLog = join(pithData, "usage.jsonl");
+export function logSpend(model: string, input: number, output: number, cost: number) {
+  mkdirSync(pithData, { recursive: true });
+  appendFileSync(spendLog, JSON.stringify([Date.now(), model, input, output, 0, 0, cost]) + "\n");
+}
+function loggedSpend(): Spend[] {
+  try { return readFileSync(spendLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Spend); } catch { return []; }
+}
+
 export type UsageReport = {
   spend: { s: number; rows: Spend[] }[];
   sessions: { file: string; title: string; cwd: string; updated: number; usage: Usage }[];
@@ -138,8 +149,16 @@ export type UsageReport = {
 // the renderer does the bucketing (local days, windows), main just hands over the rows per session
 export function usageReport(): UsageReport {
   const parsed = scan().filter((p) => p.info.id);
-  return {
+  const report: UsageReport = {
     spend: parsed.map((p, s) => ({ s, rows: p.spend })),
     sessions: parsed.map((p) => ({ file: p.info.file, title: p.info.name || p.info.firstPrompt || "untitled", cwd: p.info.cwd, updated: p.info.updated, usage: p.info.usage })),
   };
+  const logged = loggedSpend();
+  if (logged.length) {
+    const u = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+    for (const r of logged) { u.input += r[2]; u.output += r[3]; u.cost += r[6]; }
+    report.spend.push({ s: report.sessions.length, rows: logged });
+    report.sessions.push({ file: "", title: "images page", cwd: join(pithData, "images"), updated: logged[logged.length - 1][0], usage: u });
+  }
+  return report;
 }

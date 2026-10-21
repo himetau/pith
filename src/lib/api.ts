@@ -11,7 +11,7 @@ export type Spend = [ts: number, model: string, input: number, output: number, c
 export type UsageReport = { spend: { s: number; rows: Spend[] }[]; sessions: { file: string; title: string; cwd: string; updated: number; usage: SessionInfo["usage"] }[] };
 export type Settings = {
   piPath: string; extraArgs: string; defaultCwd: string; mode: Mode; font: string; proseFont: string; fontSize: number; notify: boolean;
-  budget: { window5h: number; week: number; month: number }; imageModel: string; imageProvider: string; browserHome: string; designDir: string;
+  budget: { window5h: number; week: number; month: number }; imageModel: string; imageCost: number; imageProvider: string; browserHome: string; designDir: string;
   pinned: string[]; maxLive: number; sidebar: boolean; paneWidth: number;
 };
 export type Mode = "ask" | "edits" | "plan" | "auto";
@@ -60,6 +60,10 @@ export type Api = {
   copyImage: Fn<[data: string], void>;
   notify: Fn<[title: string, body: string], void>;
   focused: Fn<[], boolean>;
+  termOpen: Fn<[id: string, cwd: string, cols: number, rows: number], void>;
+  termWrite: Fn<[id: string, data: string], void>;
+  termResize: Fn<[id: string, cols: number, rows: number], void>;
+  termClose: Fn<[id: string], void>;
   minimize: Fn<[], void>;
   maximize: Fn<[], void>;
   close: Fn<[], void>;

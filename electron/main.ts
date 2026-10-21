@@ -6,13 +6,17 @@ import { dirname, join } from "node:path";
 import { PiProc, type Rec } from "./pi";
 import { startBridge } from "./bridge";
 import { attachBrowser, detachBrowser, runBrowser } from "./browser";
-import { agentDir, listSessions, usageReport } from "./sessions";
+import { agentDir, listSessions, logSpend, usageReport } from "./sessions";
 import { agentDefs, configDir, dataDir, gitBranch, gitDiff, gitStatus, hyprLook, imagesDir, listFiles, listImages, loadMeta, loadSettings, piVersion, readAgentHub, readAny, readTheme, saveAgent, saveMeta, saveSettings, terminalFont, type SessionMeta, type Settings } from "./sys";
 import { generateImage } from "../ext/imagegen";
+import { closeAllTerms, closeTerm, openTerm, resizeTerm, writeTerm } from "./term";
 
 const root = join(__dirname, "..", "..");
-const ext = join(root, "ext", "pith-bridge.ts");
-const prompts = join(root, "prompts");
+// pi and python read these straight off disk, so a packaged build keeps them outside the asar
+const res = app.isPackaged ? process.resourcesPath : root;
+const ext = join(res, "ext", "pith-bridge.ts");
+const prompts = join(res, "prompts");
+const ptyHelper = join(res, app.isPackaged ? "shell-pty.py" : "electron/shell-pty.py");
 const dev = !!process.env.PITH_DEV;
 
 app.setName("pith");
@@ -38,7 +42,7 @@ async function bridgeCall(tab: string, op: string, args: any) {
       return {};
     case "image-settings": {
       const s = loadSettings();
-      return { model: s.imageModel, provider: s.imageProvider, dir: imagesDir, pi: s.piPath };
+      return { model: s.imageModel, provider: s.imageProvider, dir: imagesDir, pi: s.piPath, cost: s.imageCost };
     }
   }
   throw new Error(`unknown op ${op}`);
@@ -76,7 +80,7 @@ function createWindow() {
     show: !process.env.PITH_HIDDEN,
     backgroundColor: (readTheme().css.match(/--surface-lowest:\s*(#[0-9a-f]+)/i) ?? [])[1] ?? "#140c0d",
     title: "pith",
-    icon: nativeImage.createFromPath(join(root, "packaging", "icon.png")),
+    icon: nativeImage.createFromPath(join(app.isPackaged ? res : join(root, "packaging"), "icon.png")),
     webPreferences: { preload: join(__dirname, "preload.cjs"), contextIsolation: true, sandbox: false, webviewTag: true, spellcheck: true, backgroundThrottling: !process.env.PITH_HIDDEN, offscreen: !!process.env.PITH_OSR },
   });
   win.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url); return { action: "deny" }; });
@@ -197,7 +201,10 @@ h("agents:hub", () => readAgentHub());
 h("images:list", () => listImages());
 h("images:generate", async (prompt: string, inputs?: { data: string; mimeType: string }[]) => {
   const s = loadSettings();
-  return generateImage({ prompt, inputs, model: s.imageModel, provider: s.imageProvider, outDir: imagesDir, pi: s.piPath });
+  const r = await generateImage({ prompt, inputs, model: s.imageModel, provider: s.imageProvider, outDir: imagesDir, pi: s.piPath });
+  // not part of any pi session, so it goes in pith's own log for the usage page
+  logSpend(`${s.imageProvider}/${s.imageModel}`, r.usage?.input ?? 0, r.usage?.output ?? 0, s.imageCost * r.files.length);
+  return r;
 });
 
 h("open:external", (url: string) => shell.openExternal(url));
@@ -219,6 +226,11 @@ h("win:minimize", () => win?.minimize());
 h("win:maximize", () => (win?.isMaximized() ? win.unmaximize() : win?.maximize()));
 h("win:close", () => win?.close());
 
+h("term:open", (id: string, cwd: string, cols: number, rows: number) => openTerm(id, ptyHelper, existsSync(cwd) ? cwd : app.getPath("home"), cols, rows, (d) => send("term:data", id, d), (code) => send("term:exit", id, code)));
+h("term:write", (id: string, data: string) => writeTerm(id, data));
+h("term:resize", (id: string, cols: number, rows: number) => resizeTerm(id, cols, rows));
+h("term:close", (id: string) => closeTerm(id));
+
 app.whenReady().then(async () => {
   bridge = await startBridge(bridgeCall);
   createWindow();
@@ -228,5 +240,6 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   for (const p of procs.values()) p.stop();
+  closeAllTerms();
   app.quit();
 });

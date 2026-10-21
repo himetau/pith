@@ -72,3 +72,10 @@
 .ag-ev { color: var(--mid); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ag-ev.error { color: var(--red); }
 .ag-more .tool-out { margin-top: 6px; }
+
+.term-host { flex: 1; min-height: 0; position: relative; background: var(--surface-low); }
+.term-box { position: absolute; inset: 6px 4px 4px 10px; visibility: hidden; }
+.term-box.on { visibility: visible; }
+.term-box .xterm { height: 100%; }
+.term-box .xterm-viewport { background: transparent !important; }
+.term-box .xterm-viewport::-webkit-scrollbar-thumb { border-color: var(--surface-low); }

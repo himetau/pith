@@ -3,7 +3,7 @@ import { act } from "../actions";
 import { app } from "../app";
 import { runBuiltin } from "../commands";
 import { h, swap } from "../lib/dom";
-import { dur, plural } from "../lib/fmt";
+import { dur, plural, tilde } from "../lib/fmt";
 import { icon } from "../lib/icons";
 import { onTab, type Img, type Tab } from "../tab";
 import { askCard, type KeyHandler } from "./asks";
@@ -175,7 +175,7 @@ function emptyState(tab: Tab, fill: (t: string) => void) {
     : [["/review", ""], ["/explain ", "how … works"], ["/init", ""], ["/simplify", ""]];
   return h("div.empty-inner",
     h("div.empty-k", tab.kind === "design" ? "design session" : "new session"),
-    h("div.empty-cwd", tab.cwd),
+    h("div.empty-cwd", tilde(tab.cwd)),
     h("div.empty-starters", starters.map(([cmd, rest]) => h("button.starter", { onclick: () => fill(cmd + (rest.includes("…") ? "" : rest)) }, h("span.accent", cmd || "❯ "), h("span.dim", rest)))),
     h("div.empty-keys", h("span", h("kbd", "shift+tab"), " mode"), h("span", h("kbd", "ctrl+k"), " commands"), h("span", h("kbd", "@"), " files"), h("span", h("kbd", "!"), " shell")),
   );

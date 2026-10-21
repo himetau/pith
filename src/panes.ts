@@ -8,6 +8,8 @@ import { icon } from "./lib/icons";
 import { highlight, langOf } from "./lib/md";
 import { onTab, type Tab } from "./tab";
 import { fuzzy } from "./views/composer";
+import { Terminal as XTerm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
 
 export const PANES = [
   { id: "browser", label: "web", ic: "globe", keys: "alt+1" },
@@ -15,6 +17,7 @@ export const PANES = [
   { id: "diff", label: "changes", ic: "diff", keys: "alt+3" },
   { id: "files", label: "files", ic: "file", keys: "alt+4" },
   { id: "agents", label: "agents", ic: "agents", keys: "alt+5" },
+  { id: "terminal", label: "term", ic: "terminal", keys: "alt+6" },
 ] as const;
 
 const abs = (tab: Tab, p: string) => (p.startsWith("/") ? p : p.startsWith("~") ? app.sys.home + p.slice(1) : `${tab.cwd.replace(/\/$/, "")}/${p.replace(/^\.\//, "")}`);
@@ -347,6 +350,114 @@ class Agents {
   runningCount() { return (hub?.agents ?? []).filter((a: any) => ["spawning", "thinking", "tool", "streaming"].includes(a.status)).length; }
 }
 
+// ---------- terminal ----------
+// a real shell per session, started in its folder. colours are the matugen palette
+function termTheme() {
+  const v = (n: string) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  return {
+    background: v("--surface-low"), foreground: v("--on-surface"), cursor: v("--primary"), cursorAccent: v("--surface-low"),
+    selectionBackground: /^#[0-9a-f]{6}$/i.test(v("--primary")) ? `${v("--primary")}59` : "#ffffff40",
+    black: v("--surface-highest"), red: v("--red"), green: v("--green"), yellow: v("--gold"), blue: v("--blue"), magenta: v("--magenta"), cyan: v("--cyan"), white: v("--on-surface-variant"),
+    brightBlack: v("--outline"), brightRed: v("--red"), brightGreen: v("--green"), brightYellow: v("--gold"), brightBlue: v("--blue"), brightMagenta: v("--magenta"), brightCyan: v("--cyan"), brightWhite: v("--on-surface"),
+  };
+}
+
+class Terminal {
+  el = h("div.pane.terminal");
+  private host = h("div.term-host");
+  private label = h("span.pv-path");
+  private terms = new Map<string, { term: XTerm; fit: FitAddon; el: HTMLElement; alive: boolean; cwd: string }>();
+  private tab: Tab | null = null;
+
+  constructor() {
+    this.el.append(
+      h("div.pbar", this.label,
+        h("button.pb", { title: "quote the selection into the chat", onclick: () => this.quoteSelection() }, icon("copy"), h("span", "to chat")),
+        h("button.pb", { title: "new shell", onclick: () => { if (this.tab) this.restart(this.tab); } }, icon("refresh"))),
+      this.host,
+    );
+    api.on("term:data", (id: string, d: string) => this.terms.get(id)?.term.write(d));
+    api.on("term:exit", (id: string, code: number | null) => {
+      const x = this.terms.get(id);
+      if (!x) return;
+      x.alive = false;
+      x.term.write(`\r\n\x1b[2m[shell exited${code ? ` with ${code}` : ""}, press a key for a new one]\x1b[0m\r\n`);
+    });
+    api.on("theme", () => setTimeout(() => { for (const x of this.terms.values()) x.term.options.theme = termTheme(); }, 50));
+    new ResizeObserver(() => this.fit()).observe(this.host);
+  }
+
+  private fit() {
+    if (!this.tab || !this.el.classList.contains("on")) return;
+    const x = this.terms.get(this.tab.id);
+    if (!x || !x.el.offsetWidth) return;
+    try { x.fit.fit(); } catch { return; }
+    void api.termResize(this.tab.id, x.term.cols, x.term.rows);
+  }
+
+  private start(t: Tab) {
+    const x = this.terms.get(t.id)!;
+    x.alive = true;
+    void api.termOpen(t.id, t.cwd, x.term.cols || 80, x.term.rows || 24);
+  }
+
+  private restart(t: Tab) {
+    const x = this.terms.get(t.id);
+    if (!x) return;
+    void api.termClose(t.id);
+    x.term.reset();
+    this.start(t);
+    x.term.focus();
+  }
+
+  private quoteSelection() {
+    const t = this.tab, x = t && this.terms.get(t.id);
+    const sel = x?.term.getSelection().trim();
+    if (!t || !sel) return app.toast("select some terminal output first");
+    act.quote(t, `terminal output:\n${sel}`, `terminal  ·  ${sel.split("\n").length} lines`);
+  }
+
+  show(t: Tab) {
+    this.tab = t;
+    swap(this.label, tilde(t.cwd));
+    let x = this.terms.get(t.id);
+    if (!x) {
+      const el = h("div.term-box");
+      this.host.append(el);
+      const css = getComputedStyle(document.documentElement);
+      const term = new XTerm({
+        fontFamily: css.getPropertyValue("--mono").trim() || "monospace",
+        fontSize: app.settings.fontSize,
+        lineHeight: 1.15,
+        cursorBlink: true,
+        cursorStyle: "block",
+        allowProposedApi: true,
+        scrollback: 8000,
+        theme: termTheme(),
+      });
+      const fit = new FitAddon();
+      term.loadAddon(fit);
+      term.open(el);
+      x = { term, fit, el, alive: false, cwd: t.cwd };
+      this.terms.set(t.id, x);
+      const xx = x;
+      term.onData((d) => { if (xx.alive) void api.termWrite(t.id, d); else { xx.term.reset(); this.start(t); } });
+      requestAnimationFrame(() => { try { fit.fit(); } catch { /* not laid out yet */ } this.start(t); });
+    }
+    for (const [id, v] of this.terms) v.el.classList.toggle("on", id === t.id);
+    requestAnimationFrame(() => { this.fit(); x!.term.focus(); });
+  }
+
+  drop(t: Tab) {
+    const x = this.terms.get(t.id);
+    if (!x) return;
+    void api.termClose(t.id);
+    x.term.dispose();
+    x.el.remove();
+    this.terms.delete(t.id);
+  }
+}
+
 // ---------- the window ----------
 export class Side {
   el: HTMLElement;
@@ -357,11 +468,12 @@ export class Side {
   changes = new Changes();
   files = new Files();
   agents = new Agents();
+  terminal = new Terminal();
   private current: string | null = null;
 
   constructor() {
     this.el = h("div.win.side.closed", this.tabsEl, h("div.legend.r", h("button.legend-btn", { title: "close (ctrl+\\)", onclick: () => { if (app.active) this.close(app.active); } }, icon("close"))), this.body);
-    this.body.append(this.browser.el, this.preview.el, this.changes.el, this.files.el, this.agents.el);
+    this.body.append(this.browser.el, this.preview.el, this.changes.el, this.files.el, this.agents.el, this.terminal.el);
     act.openPane = (t, k) => this.open(t, k);
     act.togglePane = (t, k) => { if (t.pane === k && this.current === k) this.close(t); else this.open(t, k); };
     act.openFile = (t, p, line) => { this.files.openPath(t, p, line); this.open(t, "files"); };
@@ -391,14 +503,14 @@ export class Side {
     document.body.classList.toggle("has-side", !!kind);
     swap(this.tabsEl, PANES.map((p) => h(`button.legend-btn${p.id === kind ? ".on" : ""}`, { title: `${p.label} (${p.keys})`, onclick: () => t && this.open(t, p.id) }, p.label,
       p.id === "agents" && this.agents.runningCount() ? h("span.count", String(this.agents.runningCount())) : null)));
-    for (const p of [this.browser, this.preview, this.changes, this.files, this.agents]) p.el.classList.remove("on");
+    for (const p of [this.browser, this.preview, this.changes, this.files, this.agents, this.terminal]) p.el.classList.remove("on");
     this.current = kind;
     if (!t || !kind) return;
-    const pane = ({ browser: this.browser, preview: this.preview, diff: this.changes, files: this.files, agents: this.agents } as Record<string, { el: HTMLElement; show?: (t: Tab) => unknown }>)[kind];
+    const pane = ({ browser: this.browser, preview: this.preview, diff: this.changes, files: this.files, agents: this.agents, terminal: this.terminal } as Record<string, { el: HTMLElement; show?: (t: Tab) => unknown }>)[kind];
     pane.el.classList.add("on");
     pane.show?.(t);
     if (kind === "agents") this.agents.draw();
   }
 
-  drop(t: Tab) { this.browser.drop(t); this.preview.drop(t); }
+  drop(t: Tab) { this.browser.drop(t); this.preview.drop(t); this.terminal.drop(t); }
 }

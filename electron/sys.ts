@@ -25,6 +25,7 @@ export type Settings = {
   notify: boolean;
   budget: { window5h: number; week: number; month: number };
   imageModel: string;
+  imageCost: number;
   imageProvider: string;
   browserHome: string;
   designDir: string;
@@ -45,6 +46,7 @@ const defaults: Settings = {
   notify: true,
   budget: { window5h: 0, week: 0, month: 0 },
   imageModel: "gemini-3.1-flash-image",
+  imageCost: 0,
   imageProvider: "my-endpoint",
   browserHome: "https://duckduckgo.com",
   designDir: join(home, "Designs"),

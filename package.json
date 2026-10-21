@@ -12,12 +12,16 @@
     "start": "npm run build && electron .",
     "dev": "node scripts/build-main.mjs && PITH_DEV=1 electron .",
     "ui:dev": "vite",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dist": "npm run build && electron-builder --linux --publish never"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "dompurify": "^3.4.17",
     "electron": "^44.9.3",
+    "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "highlight.js": "^11.12.0",
     "marked": "^15.0.12",
@@ -26,6 +30,61 @@
   },
   "allowScripts": {
     "esbuild": true,
-    "electron": true
-  }
+    "electron": true,
+    "electron-winstaller": false
+  },
+  "build": {
+    "appId": "com.himetau.pith",
+    "productName": "pith",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "package.json",
+      "dist/electron/*.cjs",
+      "dist/ui/**"
+    ],
+    "extraResources": [
+      {
+        "from": "ext",
+        "to": "ext"
+      },
+      {
+        "from": "prompts",
+        "to": "prompts"
+      },
+      {
+        "from": "electron/shell-pty.py",
+        "to": "shell-pty.py"
+      },
+      {
+        "from": "packaging/icon.png",
+        "to": "icon.png"
+      }
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "packaging/icon.png",
+      "category": "Development",
+      "executableName": "pith",
+      "artifactName": "pith.${ext}",
+      "desktop": {
+        "entry": {
+          "Name": "pith",
+          "Comment": "A desktop for pi",
+          "StartupWMClass": "pith"
+        }
+      },
+      "syncDesktopName": true
+    }
+  },
+  "desktopName": "pith.desktop",
+  "author": "himetau"
 }

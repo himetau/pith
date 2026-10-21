@@ -1,4 +1,5 @@
 // Renderer entry. Lays out the windows and wires pi's events, the pickers and the keyboard
+import "@xterm/xterm/css/xterm.css";
 import "./styles/base.css";
 import "./styles/shell.css";
 import "./styles/chat.css";
@@ -166,7 +167,7 @@ function mount() {
         if (inChat && t!.running && e.target === document.body) return run(() => void t!.abort());
         return;
     }
-    const pane = k.match(/^alt\+([1-5])$/);
+    const pane = k.match(/^alt\+([1-6])$/);
     if (pane && t) return run(() => act.togglePane(t, PANES[Number(pane[1]) - 1].id));
     // typing anywhere lands in the composer
     if (inChat && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey && e.target === document.body) chatFor(t!).composer.focus();

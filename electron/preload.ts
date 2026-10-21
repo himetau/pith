@@ -14,6 +14,7 @@ const api = {
   images: inv("images:list"), generateImage: inv("images:generate"),
   openExternal: inv("open:external"), openPath: inv("open:path"), reveal: inv("open:reveal"),
   copy: inv("clip:write"), copyImage: inv("clip:image"), notify: inv("notify"), focused: inv("win:focused"),
+  termOpen: inv("term:open"), termWrite: inv("term:write"), termResize: inv("term:resize"), termClose: inv("term:close"),
   minimize: inv("win:minimize"), maximize: inv("win:maximize"), close: inv("win:close"),
   on(ch: string, fn: (...a: any[]) => void) {
     const l = (_e: unknown, ...a: any[]) => fn(...a);

@@ -24,6 +24,7 @@ export const BUILTIN: Cmd[] = [
   { name: "diff", desc: "open the changes pane", source: "app" },
   { name: "files", desc: "open the files pane", source: "app" },
   { name: "agents", desc: "live subagents", source: "app" },
+  { name: "terminal", desc: "a shell in this folder", source: "app" },
   { name: "usage", desc: "tokens, cost, limits", source: "app" },
   { name: "settings", desc: "settings", source: "app" },
   { name: "stop", desc: "stop the current run", source: "app" },
@@ -80,7 +81,7 @@ export async function runBuiltin(tab: Tab | null, text: string): Promise<boolean
       if (arg) tab.browserUrl = /^[a-z]+:/i.test(arg) ? arg : `https://${arg}`;
       act.openPane(tab, "browser");
       break;
-    case "preview": case "diff": case "files": case "agents": act.openPane(tab, name); break;
+    case "preview": case "diff": case "files": case "agents": case "terminal": act.openPane(tab, name); break;
     case "stop": void tab.abort(); break;
   }
   return true;
