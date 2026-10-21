@@ -1,0 +1,31 @@
+{
+  "name": "pith",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A desktop for pi: sessions, agents, a browser it can drive, design previews, reviews and your usage, themed by matugen.",
+  "type": "module",
+  "main": "dist/electron/main.cjs",
+  "scripts": {
+    "build:main": "node scripts/build-main.mjs",
+    "build:ui": "vite build",
+    "build": "npm run build:main && npm run build:ui",
+    "start": "npm run build && electron .",
+    "dev": "node scripts/build-main.mjs && PITH_DEV=1 electron .",
+    "ui:dev": "vite",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "dompurify": "^3.4.17",
+    "electron": "^44.9.3",
+    "esbuild": "^0.28.2",
+    "highlight.js": "^11.12.0",
+    "marked": "^15.0.12",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "electron": true
+  }
+}

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=pith
+Comment=A desktop for pi
+Exec=sh -c "cd $HOME/src/pith && node_modules/.bin/electron ."
+Icon=pith
+Categories=Development;
+StartupWMClass=pith

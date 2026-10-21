@@ -1,0 +1,70 @@
+// Types for what preload exposes as window.pith, and the pi shapes the ui reads
+export type Content = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export type Usage = { input: number; output: number; cacheRead: number; cacheWrite: number; totalTokens?: number; cost?: { total: number } };
+export type Model = { id: string; name?: string; provider: string; reasoning?: boolean; input?: string[]; contextWindow?: number; maxTokens?: number; cost?: { input: number; output: number; cacheRead: number; cacheWrite: number } };
+export type PiState = { model?: Model; thinkingLevel?: string; isStreaming?: boolean; isCompacting?: boolean; sessionFile?: string; sessionId?: string; sessionName?: string; messageCount?: number; pendingMessageCount?: number; autoCompactionEnabled?: boolean };
+export type Stats = { tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }; cost: number; contextUsage?: { tokens: number | null; contextWindow: number; percent: number | null }; toolCalls: number; userMessages: number; assistantMessages: number };
+export type Rec = { type: string; [k: string]: any };
+export type Resp = { type: "response"; success: boolean; data?: any; error?: string };
+export type SessionInfo = { file: string; id: string; cwd: string; name?: string; firstPrompt: string; started: number; updated: number; messages: number; parent?: string; model?: string; usage: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number } };
+export type Spend = [ts: number, model: string, input: number, output: number, cacheRead: number, cacheWrite: number, cost: number];
+export type UsageReport = { spend: { s: number; rows: Spend[] }[]; sessions: { file: string; title: string; cwd: string; updated: number; usage: SessionInfo["usage"] }[] };
+export type Settings = {
+  piPath: string; extraArgs: string; defaultCwd: string; mode: Mode; font: string; proseFont: string; fontSize: number; notify: boolean;
+  budget: { window5h: number; week: number; month: number }; imageModel: string; imageProvider: string; browserHome: string; designDir: string;
+  pinned: string[]; maxLive: number; sidebar: boolean; paneWidth: number;
+};
+export type Mode = "ask" | "edits" | "plan" | "auto";
+export type SysInfo = { home: string; piVersion: string; font: { family: string; weight: number } | null; hypr: { rounding: number; gap: number; border: number }; theme: { css: string; found: boolean; file: string }; imagesDir: string; agentDir: string; configDir: string; platform: string };
+export type FileRead = { kind: "text"; text: string; size: number } | { kind: "image"; data: string; mimeType: string; size: number } | { kind: "binary" | "missing" | "big"; size: number };
+export type GitStatus = { repo: false } | { repo: true; branch: string; files: { path: string; code: string; add: number; del: number }[] };
+export type AgentDef = { name: string; description: string; tools: string; model: string; file: string; scope: "user" | "project"; body: string };
+
+type Fn<A extends unknown[], R> = (...a: A) => Promise<R>;
+export type Api = {
+  start: Fn<[o: { tab: string; cwd: string; session?: string; kind?: string; model?: string; thinking?: string; mode?: string; name?: string }], { ok: boolean; state?: PiState; error?: string; pid?: number }>;
+  cmd: Fn<[tab: string, cmd: Rec], Resp>;
+  ui: Fn<[tab: string, id: string, payload: object], void>;
+  stop: Fn<[tab: string], void>;
+  setMode: Fn<[tab: string, mode: Mode], void>;
+  live: Fn<[], string[]>;
+  sessions: Fn<[], SessionInfo[]>;
+  trashSession: Fn<[file: string], void>;
+  meta: Fn<[], Record<string, { kind?: "chat" | "design"; mode?: Mode }>>;
+  setMeta: Fn<[file: string, patch: { kind?: string; mode?: string }], void>;
+  usage: Fn<[], UsageReport>;
+  settings: Fn<[], Settings>;
+  saveSettings: Fn<[patch: Partial<Settings>], Settings>;
+  sys: Fn<[], SysInfo>;
+  gitStatus: Fn<[cwd: string], GitStatus>;
+  gitDiff: Fn<[cwd: string, file: string, untracked: boolean], string>;
+  gitBranch: Fn<[cwd: string], string>;
+  listFiles: Fn<[cwd: string], string[]>;
+  read: Fn<[path: string], FileRead>;
+  write: Fn<[path: string, text: string], void>;
+  exists: Fn<[path: string], boolean>;
+  pickDir: Fn<[def?: string], string | null>;
+  pickFiles: Fn<[], string[]>;
+  watchPreview: Fn<[tab: string, path: string], void>;
+  unwatchPreview: Fn<[tab: string], void>;
+  attachBrowser: Fn<[tab: string, wcId: number], void>;
+  agentDefs: Fn<[cwd?: string], AgentDef[]>;
+  saveAgent: Fn<[def: Partial<AgentDef>, cwd?: string, scope?: string], string>;
+  agentHub: Fn<[], any>;
+  images: Fn<[], { file: string; mtime: number; prompt: string }[]>;
+  generateImage: Fn<[prompt: string, inputs?: { data: string; mimeType: string }[]], { files: string[]; images: { data: string; mimeType: string }[]; text: string }>;
+  openExternal: Fn<[url: string], void>;
+  openPath: Fn<[p: string], string>;
+  reveal: Fn<[p: string], void>;
+  copy: Fn<[t: string], void>;
+  copyImage: Fn<[data: string], void>;
+  notify: Fn<[title: string, body: string], void>;
+  focused: Fn<[], boolean>;
+  minimize: Fn<[], void>;
+  maximize: Fn<[], void>;
+  close: Fn<[], void>;
+  on(ch: string, fn: (...a: any[]) => void): () => void;
+};
+
+declare global { interface Window { pith: Api } }
+export const api = window.pith;

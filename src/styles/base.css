@@ -1,0 +1,114 @@
+/* matugen's file (~/.config/pith/colors.css) is injected after this and wins. these are only for a
+   machine without it: a plain dark neutral */
+:root {
+  --surface-lowest: #0e0f11; --surface-low: #16171a; --surface: #131416; --surface-container: #1b1c1f; --surface-high: #24262a;
+  --surface-highest: #2e3035; --surface-bright: #383a40; --outline: #8b8f98; --outline-variant: #3a3d44; --on-surface: #e3e4e8;
+  --on-surface-variant: #c3c6ce; --primary: #a9c7ff; --on-primary: #08305f; --primary-container: #224777; --on-primary-container: #d6e3ff;
+  --secondary: #bdc7dc; --secondary-container: #3e4759; --on-secondary-container: #d9e3f8; --tertiary: #dcbce1; --tertiary-container: #573e5c;
+  --on-tertiary-container: #f9d8fe; --error: #ffb4ab; --error-container: #93000a;
+  --red: #f2838f; --green: #87ee86; --gold: #efc186; --orange: #f09d84; --cyan: #87edcd; --blue: #8f86ef; --magenta: #c785f0;
+
+  --mono: ui-monospace, monospace; --prose: var(--mono); --weight: 400; --fs: 14px;
+  --gap: 10px; --bw: 2px; --round: 8px; --side-w: 520px;
+  color-scheme: dark;
+}
+
+/* roles, built from the palette */
+:root {
+  --gutter: var(--surface-lowest);
+  --bg: var(--surface);
+  --raised: var(--surface-container);
+  --high: var(--surface-high);
+  --line: var(--outline-variant);
+  --rule: color-mix(in srgb, var(--outline-variant) 60%, transparent);
+  --text: var(--on-surface);
+  --mid: var(--on-surface-variant);
+  --dim: var(--outline);
+  --accent: var(--primary);
+  --win-on: color-mix(in srgb, var(--on-surface) 80%, var(--outline-variant));
+  --hover: color-mix(in srgb, var(--on-surface) 6%, transparent);
+  --sel: color-mix(in srgb, var(--primary) 16%, transparent);
+  --add: var(--green); --del: var(--red);
+  --add-bg: color-mix(in srgb, var(--green) 11%, transparent);
+  --del-bg: color-mix(in srgb, var(--red) 11%, transparent);
+  --r2: calc(var(--round) * .6);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body {
+  background: var(--gutter); color: var(--text);
+  font: var(--weight) var(--fs)/1.55 var(--mono);
+  font-variant-ligatures: contextual; -webkit-font-smoothing: antialiased;
+}
+button, input, textarea, select { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; padding: 0; }
+button:disabled { opacity: .45; cursor: default; }
+input, textarea { outline: none; }
+::selection { background: color-mix(in srgb, var(--primary) 38%, transparent); }
+:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; }
+::placeholder { color: var(--dim); opacity: .8; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--line); border: 3px solid transparent; background-clip: padding-box; border-radius: 9px; }
+::-webkit-scrollbar-thumb:hover { background-color: var(--dim); }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+
+.ic { width: 1.05em; height: 1.05em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; vertical-align: -.15em; }
+.dim { color: var(--dim); }
+.mid { color: var(--mid); }
+.accent { color: var(--accent); }
+.add { color: var(--add); }
+.del, .bad { color: var(--red); }
+.warn { color: var(--gold); }
+.mono { font-family: var(--mono); }
+.grow { flex: 1; }
+[hidden] { display: none !important; }
+/* braille spinner frames are tiny at text size */
+[data-spin] { display: inline-block; min-width: 1ch; font-size: 1.2em; line-height: 1; font-weight: 700; vertical-align: -.05em; }
+
+kbd {
+  font: inherit; font-size: .78em; line-height: 1; padding: 2px 5px 3px; border-radius: 4px;
+  color: var(--mid); background: var(--high); box-shadow: inset 0 -1px 0 var(--line);
+}
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--r2);
+  border: 1px solid var(--line); color: var(--text); background: var(--raised); white-space: nowrap;
+}
+.btn:hover:not(:disabled) { background: var(--high); }
+.btn.pri { background: var(--primary); color: var(--on-primary); border-color: var(--primary); }
+.btn.pri:hover:not(:disabled) { background: color-mix(in srgb, var(--primary) 88%, white); }
+.btn.ghost { background: transparent; }
+.btn.sm { padding: 3px 9px; font-size: .88em; }
+.link { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.mini { font-size: .8em; padding: 0 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--mid); }
+.mini:hover { color: var(--text); background: var(--hover); }
+.ia { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; color: var(--dim); }
+.ia:hover { color: var(--text); background: var(--hover); }
+
+.segs { display: inline-flex; border: 1px solid var(--line); border-radius: var(--r2); padding: 2px; gap: 2px; }
+.seg { padding: 2px 10px; border-radius: calc(var(--r2) - 2px); color: var(--dim); }
+.seg:hover { color: var(--text); }
+.seg.on { background: var(--high); color: var(--text); }
+
+.toggle { width: 36px; height: 20px; border-radius: 20px; background: var(--high); border: 1px solid var(--line); position: relative; }
+.toggle i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--dim); transition: transform .15s, background .15s; }
+.toggle.on { background: color-mix(in srgb, var(--primary) 30%, var(--high)); }
+.toggle.on i { transform: translateX(16px); background: var(--primary); }
+
+/* highlight.js, in the palette */
+.hljs { color: var(--text); }
+.hljs-comment, .hljs-quote { color: var(--dim); font-style: italic; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in, .hljs-meta .hljs-keyword { color: var(--primary); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-attribute .hljs-string { color: var(--green); }
+.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet { color: var(--orange); }
+.hljs-title, .hljs-title.function_, .hljs-section { color: var(--cyan); }
+.hljs-title.class_, .hljs-type, .hljs-class .hljs-title { color: var(--gold); }
+.hljs-attr, .hljs-attribute, .hljs-variable, .hljs-template-variable, .hljs-property { color: var(--tertiary); }
+.hljs-tag, .hljs-name, .hljs-selector-id, .hljs-selector-class { color: var(--magenta); }
+.hljs-meta, .hljs-params { color: var(--mid); }
+.hljs-deletion { color: var(--red); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
