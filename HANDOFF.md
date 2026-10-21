@@ -57,4 +57,4 @@ import -display :77 -window root /tmp/pith-dev/shot.png
 Kill by pid, and check the pid is yours: `setsid` behind `&&` hands back a wrapper shell's pid, not the app's.
 
 ## Conventions
-Commits are lowercase and casual, in the user's voice, with `-c user.name=himetau -c user.email=168368537+himetau@users.noreply.github.com`. Comments are short and lowercase, explaining why.
+Commits are lowercase and casual, in the user's voice. The repo's local git config has the identity (himetau, GitHub noreply address); never the proton one. It pushes to github.com/himetau/pith (private). Comments are short and lowercase, explaining why.
