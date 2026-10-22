@@ -9,9 +9,6 @@ use std::sync::OnceLock;
 #[derive(Clone, Debug)]
 pub struct Cmd { pub name: String, pub desc: String, pub arg: Option<String>, pub source: String }
 
-// pith's own that still mean something before there's a session
-const NO_TAB: [&str; 6] = ["mode", "plan", "image", "agents", "usage", "settings"];
-
 impl Cmd {
     fn app(name: &str, desc: &str, arg: Option<&str>) -> Self { Cmd { name: name.into(), desc: desc.into(), arg: arg.map(String::from), source: "app".into() } }
     // what the menu shows next to the name: nothing for pith's own, otherwise where it comes from
@@ -22,22 +19,26 @@ impl Cmd {
 
 fn builtin() -> Vec<Cmd> {
     vec![
-        Cmd::app("new", "New session in this folder", None),
-        Cmd::app("compact", "Summarise older context to free room", Some("[what to keep]")),
-        Cmd::app("model", "Switch model", None),
-        Cmd::app("effort", "How hard the model thinks", Some("[level]")),
-        Cmd::app("mode", "Ask, edits, plan or auto", Some("[mode]")),
-        Cmd::app("plan", "Switch to plan mode, read only", None),
-        Cmd::app("name", "Rename this session", Some("<title>")),
-        Cmd::app("copy", "Copy the last reply", None),
-        Cmd::app("image", "Generate an image", Some("<prompt>")),
-        Cmd::app("diff", "Show what changed", None),
-        Cmd::app("files", "Browse the project's files", None),
-        Cmd::app("terminal", "A shell in this folder", None),
-        Cmd::app("agents", "Subagents", None),
-        Cmd::app("usage", "Tokens, cost, limits", None),
-        Cmd::app("settings", "Settings", None),
-        Cmd::app("stop", "Stop the current run", None),
+        Cmd::app("new", "new session in this folder", None),
+        Cmd::app("compact", "summarise older context to free room", Some("[what to keep]")),
+        Cmd::app("model", "switch model", None),
+        Cmd::app("effort", "how hard the model thinks", None),
+        Cmd::app("mode", "ask · edits · plan · auto", Some("[mode]")),
+        Cmd::app("plan", "switch to plan mode (read-only)", None),
+        Cmd::app("name", "rename this session", Some("<title>")),
+        Cmd::app("clone", "copy this session into a new one", None),
+        Cmd::app("export", "save the session as an html page", None),
+        Cmd::app("copy", "copy the last reply", None),
+        Cmd::app("image", "generate an image", Some("<prompt>")),
+        Cmd::app("browser", "open the browser pane", Some("[url]")),
+        Cmd::app("preview", "open the preview pane", None),
+        Cmd::app("diff", "open the changes pane", None),
+        Cmd::app("files", "open the files pane", None),
+        Cmd::app("agents", "live subagents", None),
+        Cmd::app("terminal", "a shell in this folder", None),
+        Cmd::app("usage", "tokens, cost, limits", None),
+        Cmd::app("settings", "settings", None),
+        Cmd::app("stop", "stop the current run", None),
     ]
 }
 
@@ -61,13 +62,14 @@ fn bundled() -> &'static Vec<Cmd> {
     })
 }
 
+// commands.ts commandsFor: pith's own (unless pi has one by that name), pi's, then the bundled templates until pi
+// has said what it has
 pub fn commands_for(tab: Option<&Tab>) -> Vec<Cmd> {
     let pi: Vec<Cmd> = tab.map(|t| t.commands.iter().map(|c| Cmd { name: c.name.clone(), desc: c.description.clone(), arg: None, source: c.source.clone() }).collect()).unwrap_or_default();
-    let own = builtin().into_iter().filter(|b| !pi.iter().any(|c| c.name == b.name) && (tab.is_some() || NO_TAB.contains(&b.name.as_str())));
-    // before pi has said what it has, the templates pith ships are what there is, and they lead
-    if tab.is_none() { return bundled().iter().cloned().chain(own).collect(); }
-    let mut out: Vec<Cmd> = own.collect();
-    if pi.is_empty() { out.extend(bundled().iter().cloned()); } else { out.extend(pi); }
+    let mut out: Vec<Cmd> = builtin().into_iter().filter(|b| !pi.iter().any(|c| c.name == b.name)).collect();
+    let none = pi.is_empty();
+    out.extend(pi);
+    if none { out.extend(bundled().iter().cloned()); }
     out
 }
 
@@ -95,20 +97,10 @@ pub fn run_builtin(tab: Option<Entity<Tab>>, text: &str, window: &mut Window, cx
     match name {
         "usage" => { app.update(cx, |a, cx| a.show(View::Usage, cx)); return true; }
         "settings" => { app.update(cx, |a, cx| a.show(View::Settings, cx)); return true; }
-        "agents" => { app.update(cx, |a, cx| a.show(View::Agents, cx)); return true; }
-        "image" if arg.is_empty() => { app.update(cx, |a, cx| a.show(View::Images, cx)); return true; }
-        "mode" | "plan" if tab.is_none() => {
-            let m = if name == "plan" { Some(Mode::Plan) } else { Mode::ALL.into_iter().find(|m| m.as_str() == arg) };
-            match m {
-                Some(m) => app.update(cx, |a, cx| a.save_settings(json!({ "mode": m.as_str() }), cx)),
-                None => pick_mode(None, window, cx),
-            }
-            return true;
-        }
         _ => {}
     }
     let Some(tab) = tab else {
-        app.update(cx, |a, cx| a.toast(Level::Info, "Start a session first", cx));
+        app.update(cx, |a, cx| a.toast(Level::Info, "open a session first", cx));
         return true;
     };
     match name {
@@ -131,14 +123,38 @@ pub fn run_builtin(tab: Option<Entity<Tab>>, text: &str, window: &mut Window, cx
         },
         "plan" => tab.update(cx, |t, cx| t.set_mode(Mode::Plan, cx)),
         "name" => if arg.is_empty() { app.update(cx, |a, cx| a.toast(Level::Info, "/name needs a title", cx)) } else { tab.update(cx, |t, cx| t.rename(arg, cx)) },
+        "clone" => tab.update(cx, |t, cx| t.clone_session(cx)),
+        // saved next to the session, then opened
+        "export" => tab.update(cx, |t, cx| {
+            // pi answers with a path relative to the session's folder
+            let cwd = std::path::PathBuf::from(&t.cwd);
+            t.export_html(cx, move |t, p, cx| match p {
+                Some(p) => {
+                    Pith::global(cx).update(cx, |a, cx| a.toast(Level::Info, format!("saved {p}"), cx));
+                    cx.open_with_system(&cwd.join(&p));
+                }
+                None => t.note(Level::Error, "export failed", cx),
+            })
+        }),
         "copy" => match last_reply(tab.read(cx)) {
-            Some(t) => { cx.write_to_clipboard(ClipboardItem::new_string(t)); app.update(cx, |a, cx| a.toast(Level::Info, "Copied the last reply", cx)); }
-            None => app.update(cx, |a, cx| a.toast(Level::Info, "Nothing to copy yet", cx)),
+            Some(t) => { cx.write_to_clipboard(ClipboardItem::new_string(t)); app.update(cx, |a, cx| a.toast(Level::Info, "copied", cx)); }
+            None => {}
         },
+        "image" if arg.is_empty() => app.update(cx, |a, cx| a.show(View::Images, cx)),
         "image" => tab.update(cx, |t, cx| t.send(format!("Generate this image with generate_image, then show it: {arg}"), vec![], crate::state::tab::How::Auto, cx)),
-        // the side panel decides which of its views to show
+        // the agent's browser page, made or sent somewhere new, then the pane on it
+        "browser" => {
+            if !arg.is_empty() {
+                let url = if arg.split_once(':').is_some_and(|(s, _)| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic())) { arg.clone() } else { format!("https://{arg}") };
+                let id = crate::core::browser::page_id(&tab.read(cx).id);
+                crate::core::web::open(&id, &url, 1280, 860);
+            }
+            super::panes::open(super::panes::Pane::Browser, cx)
+        }
+        "preview" => super::panes::open(super::panes::Pane::Preview, cx),
         "diff" => super::panes::open(super::panes::Pane::Changes, cx),
         "files" => super::panes::open(super::panes::Pane::Files, cx),
+        "agents" => super::panes::open(super::panes::Pane::Agents, cx),
         "terminal" => super::panes::open(super::panes::Pane::Terminal, cx),
         "stop" => tab.update(cx, |t, cx| t.abort(cx)),
         _ => return false,
