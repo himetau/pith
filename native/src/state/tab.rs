@@ -250,6 +250,8 @@ impl Tab {
                 t.proc = Some(proc.clone());
                 t.state = st["data"].clone();
                 if let Some(f) = t.state["sessionFile"].as_str() { t.file = Some(f.to_string()); }
+                // kind and mode go next to the file from the start, so a design reopens as one
+                t.save_meta();
                 // history goes in before anyone can send, a load landing after a live message would wipe it
                 if let Some(r) = &entries { if r["success"] == true { t.fill(&r["data"]["entries"], r["data"]["leafId"].as_str()); } }
                 t.loaded = true;
