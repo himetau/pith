@@ -55,10 +55,8 @@ impl Files {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("find a file"));
         let subs = vec![cx.subscribe_in(&input, window, |this, s, ev: &InputEvent, window, cx| match ev {
             InputEvent::Change => { this.query = s.read(cx).value().trim().to_string(); this.search(cx); }
-            // the tree may have grown since the list was read
-            InputEvent::Focus => { this.finding = true; this.load_list(true, cx); cx.notify(); }
+            InputEvent::Focus | InputEvent::Blur => {}
             InputEvent::PressEnter { .. } => { if let Some(f) = this.hits.get(this.hit).cloned() { this.pick(f, window, cx); } }
-            InputEvent::Blur => { this.finding = false; cx.notify(); }
         })];
         Files {
             input, cwd: String::new(), tab: None, all: Arc::new(vec![]), all_cwd: String::new(), listing: false, query: String::new(), finding: false, hits: vec![], hit: 0,
@@ -226,6 +224,9 @@ impl Render for Files {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
+        // focus is when the results show and the tree is read again (it may have grown); the input's own focus events don't reach us here
+        if focused && !self.finding { self.load_list(true, cx); }
+        self.finding = focused;
         let results = (self.finding && !self.hits.is_empty()).then(|| {
             let high = p.high;
             div().id("f-results").flex_none().max_h(relative(0.5)).overflow_y_scroll().p(u(4.)).border_b(u(1.)).border_color(p.rule)
