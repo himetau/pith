@@ -337,11 +337,11 @@ impl UsagePage {
             ("cached", Box::new(|t: &Tot| tokens(t.cache_read))), ("cost", Box::new(|t: &Tot| cost(t.cost))),
         ];
         let ws: Vec<f32> = cols.iter().map(|(h, f)| colw(f.as_ref(), h)).collect();
-        let namew = rows.iter().map(|r| (r.0.chars().count() as f32 * ch).max((r.1.chars().count().min(34) as f32) * ch * 0.82 / 0.9).max(220.)).fold(0., f32::max);
+        let namew = rows.iter().map(|r| (r.0.chars().count() as f32 * ch).max((r.1.chars().count().min(34) as f32) * ch * 0.82 / 0.9)).fold(0., f32::max);
         let col = |w: f32| fr(w).flex_basis(u(w)).min_w(u(w));
         let header = div().flex().text_size(em(cx, 0.9 * 0.85)).text_color(p.dim).pb(u(4.))
             .child(col(namew))
-            .children(cols.iter().zip(&ws).map(|((h, _), w)| col(*w).flex().justify_end().child(h.to_string())));
+            .children(cols.iter().zip(&ws).map(|((h, _), w)| col(*w).items_end().child(h.to_string())));
         let body = rows.iter().map(|(n, sub, t)| {
             div().flex().border_t(u(1.)).border_color(p.rule)
                 .child(col(namew).min_w_0().py(u(5.))
@@ -349,7 +349,7 @@ impl UsagePage {
                     .child(div().text_size(em(cx, 0.9 * 0.82)).text_color(p.dim).max_w(u(34. * ch * 0.82 / 0.9)).whitespace_nowrap().overflow_hidden().text_ellipsis_start().child(sub.clone()))
                     .child(div().h(u(4.)).mt(u(4.)).max_w(u(220.)).rounded(u(2.)).bg(p.high)
                         .child(div().h_full().min_w(u(2.)).rounded(u(2.)).bg(p.primary).w(relative((t.cost / max) as f32)))))
-                .children(cols.iter().zip(&ws).enumerate().map(|(i, ((_, f), w))| col(*w).py(u(5.)).flex().justify_end().whitespace_nowrap()
+                .children(cols.iter().zip(&ws).enumerate().map(|(i, ((_, f), w))| col(*w).py(u(5.)).items_end().whitespace_nowrap()
                     .text_color(if i == 3 { p.text } else { p.mid }).child(f(t))))
         });
         div().w_full().text_size(em(cx, 0.9)).child(header).children(body).into_any_element()
