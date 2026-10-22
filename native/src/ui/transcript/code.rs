@@ -137,12 +137,6 @@ pub fn code(id: impl Into<SharedString>, text: &str, lang: Option<&str>, start: 
     frame(id, Some(text.to_string()), cx).child(col)
 }
 
-// plain output: no gutter, no colours, the tail when it's live
-pub fn output(id: impl Into<SharedString>, text: &str, cx: &App) -> Div {
-    let p = pal(cx);
-    let body = if text.trim().is_empty() { div().text_color(p.dim).child("No output") } else { div().text_color(p.mid).child(text.trim_end_matches('\n').replace('\t', "    ")) };
-    frame(id, Some(text.to_string()), cx).child(div().px_3().py_2().pr_8().child(body))
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind { Add, Del, Same, Gap }
@@ -186,13 +180,6 @@ fn diff_rows(id: SharedString, rows: Vec<(Kind, String, String)>, lang: Option<&
     frame(id, Some(copy), cx).child(col)
 }
 
-pub fn diff(id: impl Into<SharedString>, diff: &str, lang: Option<&str>, limit: usize, cx: &App) -> Div {
-    let rows = parse_diff(diff);
-    // copying a diff gives the new side, the thing you'd paste somewhere
-    let copy = rows.iter().filter(|r| r.0 != Kind::Del && r.0 != Kind::Gap).map(|r| r.2.as_str()).collect::<Vec<_>>().join("\n");
-    diff_rows(id.into(), rows, lang, limit, copy, cx)
-}
-pub fn diff_len(diff: &str) -> usize { diff.lines().count() }
 
 // before pi sends its numbered diff (streaming, or a failed edit) the edit args are all there is
 pub fn edits(id: impl Into<SharedString>, edits: &[(String, String)], lang: Option<&str>, limit: usize, cx: &App) -> Div {

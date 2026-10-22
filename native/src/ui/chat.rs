@@ -138,7 +138,7 @@ impl ChatView {
         let Some(item) = tab.items.get(ix) else { return div().into_any_element() };
         let p = pal(cx);
         let id = item.id;
-        let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(ix, cx), tab: &tab_e, cwd: &tab.cwd };
+        let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(ix, cx), tab: &tab_e };
         let last_of_turn = |ix: usize| {
             let next = tab.items[ix + 1..].iter().find(|i| matches!(i.kind, ItemKind::User { .. } | ItemKind::Assistant(_)));
             match next { Some(i) => matches!(i.kind, ItemKind::User { .. }), None => !tab.running() }
@@ -177,7 +177,7 @@ impl ChatView {
         let t = self.tab.read(cx);
         let (running, dead, err) = (t.running(), t.status == Status::Dead, t.error.clone());
         let last_bottom = t.items.len().checked_sub(1).map(|j| {
-            let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(j, cx), tab: &self.tab, cwd: &t.cwd };
+            let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(j, cx), tab: &self.tab };
             margins(t, j, !t.running(), &ui).1
         }).unwrap_or(0.);
         let steps = (running && self.steps_open).then(|| steps::run_steps(t, cx));
@@ -235,8 +235,8 @@ impl ChatView {
             .child(div().flex_none().w(u(18.)).text_color(p.primary).font_weight(FontWeight::BOLD).child("❯"))
             .child(body)
             .child(div().absolute().top(u(4.)).right(u(6.)).flex().gap(u(2.)).bg(p.raised).rounded(u(5.)).opacity(0.).group_hover(group, |s| s.opacity(1.))
-                .child(ia(format!("ucp{id}"), IconName::Copy, 24., "copy", cx).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))))
-                .when(entry_id.is_some(), |d| d.child(ia(format!("ubr{id}"), IconName::GitBranch, 24., "edit and branch from here", cx).on_click(edit))))
+                .child(ia(format!("ucp{id}"), IconName::Copy, 24., 1., "copy", cx).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))))
+                .when(entry_id.is_some(), |d| d.child(ia(format!("ubr{id}"), IconName::GitBranch, 24., 1., "edit and branch from here", cx).on_click(edit))))
             .into_any_element()
     }
 
@@ -284,11 +284,11 @@ fn wrap(inner: Div, _cx: &App) -> AnyElement {
 }
 
 // .ia: a small icon button, dim until hovered
-fn ia(id: String, icon: IconName, size: f32, _title: &str, cx: &App) -> Stateful<Div> {
+fn ia(id: String, icon: IconName, size: f32, font: f32, _title: &str, cx: &App) -> Stateful<Div> {
     let p = pal(cx);
     let (txt, hov) = (p.text, p.hover);
     div().id(SharedString::from(id)).flex_none().size(u(size)).flex().items_center().justify_center().rounded(u(5.)).text_color(p.dim).cursor_pointer()
-        .hover(move |s| s.text_color(txt).bg(hov)).child(Icon::new(icon).size(em(cx, 1.2)))
+        .hover(move |s| s.text_color(txt).bg(hov)).child(Icon::new(icon).size(em(cx, font * 1.2)))
 }
 
 // an item's css margins (top, bottom) in px, with what its last child pushes through
@@ -369,9 +369,9 @@ fn assistant(id: u64, ix: usize, a: &Assistant, last_of_turn: bool, ui: &Ui, tab
         col = col.child(div().group(group.clone()).mt(u(14.)).flex().items_center().gap(u(10.)).text_size(em(cx, 0.78)).text_color(p.dim)
             .child(rule())
             .child(div().whitespace_nowrap().child(meta.join(" · ")))
-            .when(!reply.trim().is_empty(), |d| d.child(ia(format!("tfc{id}"), IconName::Copy, 20., "copy reply", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
+            .when(!reply.trim().is_empty(), |d| d.child(ia(format!("tfc{id}"), IconName::Copy, 20., 0.78, "copy reply", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
                 .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(reply.clone())))))
-            .child(ia(format!("tfr{id}"), IconName::RefreshCw, 20., "retry: branch from the prompt before this and send it again", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).on_click(retry))
+            .child(ia(format!("tfr{id}"), IconName::RefreshCw, 20., 0.78, "retry: branch from the prompt before this and send it again", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).on_click(retry))
             .child(rule()));
     }
     col.into_any_element()
@@ -533,6 +533,7 @@ impl Render for ChatView {
                     .when_some(empty_el, |d, e| d.child(div().absolute().top(u(22.)).left_0().right_0().child(wrap(div().child(e), cx))))
                     // .chat-scroll's mask: the top 22px fade out
                     .child(div().absolute().top_0().left_0().right_0().h(u(22.)).bg(linear_gradient(180., linear_color_stop(bg, 0.), linear_color_stop(bg.opacity(0.), 1.))))
+                    .child(div().absolute().inset_0().child(gpui_kit::base::Scrollbar::vertical(&self.list).mode(gpui_kit::base::ScrollbarMode::Always)))
                     .children(jump),
             )
             .child(

@@ -81,7 +81,6 @@ pub struct Ui<'a> {
     pub closed: &'a HashSet<String>,
     pub toggle: Rc<dyn Fn(String, bool, &mut App)>,
     pub tab: &'a Entity<Tab>,
-    pub cwd: &'a str,
 }
 impl Ui<'_> {
     // a row that opens itself (a live command, a small diff) stays open until you close it
@@ -316,7 +315,6 @@ fn diff_view(id: String, rows: Vec<(DK, String, String)>, cx: &App) -> AnyElemen
     div().id(SharedString::from(format!("{id}-sc"))).overflow_x_scroll().text_size(em(cx, 0.9 * 0.9)).line_height(relative(1.5)).whitespace_nowrap().child(col).into_any_element()
 }
 
-pub fn diff_counts(diff: &str) -> (usize, usize) { code::diff_counts(diff) }
 
 fn edits_rows(edits: &[(String, String)]) -> Vec<(DK, String, String)> {
     let mut rows = vec![];
