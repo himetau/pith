@@ -1,13 +1,14 @@
 // dev only: PITH_CTL=<dir> lets scripts drive the app. drop {"...": ...} as <id>.cmd.json, the answer lands in <id>.out.json.
 //   {"keys": "ctrl-k"}            a keystroke, as if typed
 //   {"type": "hello"}             text into whatever has focus
-//   {"click": [x, y]}             left click at window coordinates, "count": 2 for a double click
+//   {"click": [x, y]}             left click at window coordinates, "count": 2 for a double click, "button": "right"
 //   {"move": [x, y]}              the pointer, for hover states
 //   {"drag": [x0, y0, x1, y1]}    press at one point, move to the other in steps, release
 //   {"scroll": [x, y, dy]}        a wheel scroll, dy in pixels (negative scrolls up)
 //   {"open": "<session file>"}    open a session
 //   {"view": "home|settings|usage|agents|images"}  switch page
 //   {"dump": true}                the app's state as json
+//   {"lightbox": "<png>", "caption": "...", "bytes": true}   the image viewer, on a path or decoded bytes
 //   {"resize": [w, h]}
 //   {"drop": ["<path>", ...], "at": [x, y]}   files dragged onto the window, then {"release": [x, y]} drops them
 //   {"event": {...}}              a pi event into the open session
@@ -56,10 +57,11 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
     } else if let Some(c) = cmd["click"].as_array() {
         let pos = point(pt(&cmd["click"], 0), pt(&cmd["click"], 1));
         let _ = c;
+        let button = if cmd["button"] == "right" { MouseButton::Right } else { MouseButton::Left };
         window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: pos, pressed_button: None, modifiers: Modifiers::default() }), cx);
         for n in 1..=cmd["count"].as_u64().unwrap_or(1).max(1) as usize {
-            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: pos, modifiers: Modifiers::default(), click_count: n, first_mouse: false }), cx);
-            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: pos, modifiers: Modifiers::default(), click_count: n }), cx);
+            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button, position: pos, modifiers: Modifiers::default(), click_count: n, first_mouse: false }), cx);
+            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: pos, modifiers: Modifiers::default(), click_count: n }), cx);
         }
     } else if cmd["drag"].is_array() {
         let (a, b) = (point(pt(&cmd["drag"], 0), pt(&cmd["drag"], 1)), point(pt(&cmd["drag"], 2), pt(&cmd["drag"], 3)));
@@ -107,6 +109,9 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         // as if pi had sent it to the open session, e.g. an extension_ui_request
         let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
         t.update(cx, |t, cx| t.on_event(&cmd["event"], cx));
+    } else if let Some(p) = cmd["lightbox"].as_str() {
+        let src = if cmd["bytes"] == true { crate::ui::lightbox::Src::Image(std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, std::fs::read(p).unwrap_or_default()))) } else { crate::ui::lightbox::Src::Path(p.into()) };
+        crate::ui::lightbox::open(src, cmd["caption"].as_str().map(String::from), window, cx);
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));
     } else if let Some(url) = cmd["webtest"]["url"].as_str() {

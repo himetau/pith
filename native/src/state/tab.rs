@@ -27,9 +27,9 @@ impl Mode {
     pub fn hint(self) -> &'static str {
         match self {
             Mode::Ask => "asks before edits and commands",
-            Mode::Edits => "edits files, asks before commands",
-            Mode::Plan => "reads and plans, changes nothing",
-            Mode::Auto => "does everything without asking",
+            Mode::Edits => "edits files freely, asks before commands",
+            Mode::Plan => "read-only, ends with a plan",
+            Mode::Auto => "never asks",
         }
     }
 }
@@ -172,6 +172,8 @@ pub struct Tab {
     pub run_start: Option<Instant>,
     pub last_used: Instant,
     pub preview: Option<Value>,
+    // when you last sent something (ms), which is what orders the sidebar. a new session counts from when it was made
+    pub sent: f64,
     // bumps on every transcript change, the chat view re-measures when it moves
     pub version: u64,
     proc: Option<Arc<PiProc>>,
@@ -185,12 +187,13 @@ pub struct Tab {
 impl Tab {
     pub fn new(cwd: String, file: Option<String>, kind: Kind, mode: Mode, name: Option<String>, spawner: Spawner) -> Self {
         let n = NEXT_TAB.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let sent = if file.is_none() { now_ms() } else { 0. };
         Tab {
             id: format!("t{}{}", std::process::id(), n), cwd, file, kind, mode, name, status: Status::Cold,
             items: vec![], tools: HashMap::new(), state: json!({}), levels: vec![], stats: Value::Null,
             queue: (vec![], vec![]), asks: vec![], widgets: vec![], statuses: vec![], commands: vec![], todos: vec![],
             unread: false, error: String::new(), compacting: false, retry: None, run_start: None, last_used: Instant::now(),
-            preview: None, version: 0, proc: None, spawner, starting: None, typed: vec![], live: None, loaded: false,
+            preview: None, sent, version: 0, proc: None, spawner, starting: None, typed: vec![], live: None, loaded: false,
         }
     }
 
@@ -199,7 +202,7 @@ impl Tab {
         for it in &self.items {
             if let ItemKind::User { text, typed, .. } = &it.kind { return title_from(typed.as_deref().unwrap_or(text)); }
         }
-        if self.kind == Kind::Design { "New design".into() } else { "New session".into() }
+        if self.kind == Kind::Design { "new design".into() } else { "new session".into() }
     }
     pub fn running(&self) -> bool { self.status == Status::Running }
     pub fn live_process(&self) -> bool { matches!(self.status, Status::Idle | Status::Running | Status::Starting) }
@@ -247,6 +250,8 @@ impl Tab {
                 t.proc = Some(proc.clone());
                 t.state = st["data"].clone();
                 if let Some(f) = t.state["sessionFile"].as_str() { t.file = Some(f.to_string()); }
+                // kind and mode go next to the file from the start, so a design reopens as one
+                t.save_meta();
                 // history goes in before anyone can send, a load landing after a live message would wipe it
                 if let Some(r) = &entries { if r["success"] == true { t.fill(&r["data"]["entries"], r["data"]["leafId"].as_str()); } }
                 t.loaded = true;
@@ -654,6 +659,7 @@ impl Tab {
 
     // ---------- actions ----------
     pub fn send(&mut self, text: String, images: Vec<Img>, how: How, cx: &mut Context<Self>) {
+        self.sent = now_ms();
         let ready = self.ensure(cx);
         cx.spawn(async move |this, cx| {
             if !ready.await { return; }
@@ -798,6 +804,8 @@ impl Tab {
         if self.file.is_some() || self.live_process() { self.with_pi(json!({ "type": "set_session_name", "name": name }), cx, |_, _, _| {}); }
     }
 
+    // pi's new_session on this process. the palette doesn't offer it any more (the webview never did)
+    #[allow(dead_code)]
     pub fn new_session(&mut self, cx: &mut Context<Self>) {
         self.with_pi(json!({ "type": "new_session" }), cx, |t, r, cx| {
             if r["success"] == true && r["data"]["cancelled"] != true { t.name = None; t.reload_state(true, cx); }
@@ -811,6 +819,27 @@ impl Tab {
             cx.emit(TabEvent::Draft(s(&r["data"]["text"])));
         });
     }
+
+    // a copy of this session on a new file, which this process switches to (pi's clone)
+    pub fn clone_session(&mut self, cx: &mut Context<Self>) {
+        self.with_pi(json!({ "type": "clone" }), cx, |t, r, cx| {
+            if r["success"] == true && r["data"]["cancelled"] != true { t.reload_state(true, cx); }
+        });
+    }
+
+    // pi writes the session out as html; hands back where
+    pub fn export_html(&mut self, cx: &mut Context<Self>, then: impl FnOnce(&mut Tab, Option<String>, &mut Context<Tab>) + 'static) {
+        self.with_pi(json!({ "type": "export_html" }), cx, move |t, r, cx| then(t, if r["success"] == true { r["data"]["path"].as_str().map(String::from) } else { None }, cx));
+    }
+
+    // the last reply's text, from pi (empty when it isn't running)
+    pub fn last_text(&self) -> impl std::future::Future<Output = String> + 'static {
+        let f = self.cmd(json!({ "type": "get_last_assistant_text" }));
+        async move { let r = f.await; if r["success"] == true { s(&r["data"]["text"]) } else { String::new() } }
+    }
+
+    // ms since the epoch this tab was last used, for sorting next to disk times
+    pub fn last_used_ms(&self) -> f64 { now_ms() - self.last_used.elapsed().as_millis() as f64 }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let f = self.cmd(json!({ "type": "get_entries" }));
@@ -876,6 +905,11 @@ pub fn strip_ansi(s: &str) -> String {
 
 // a sidebar-sized title from the first thing someone typed
 pub fn title_from(t: &str) -> String {
-    let line = t.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
-    if line.chars().count() > 60 { format!("{}…", line.chars().take(60).collect::<String>().trim_end()) } else { line.to_string() }
+    // fmt.ts titleFrom: whitespace squeezed, cut back to a word before 60
+    let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
+    if t.is_empty() { return "new session".into(); }
+    if t.chars().count() <= 60 { return t; }
+    let cut: String = t.chars().take(58).collect();
+    let cut = match cut.rfind(' ') { Some(i) => cut[..i].to_string(), None => cut };
+    format!("{cut}…")
 }

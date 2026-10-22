@@ -1,9 +1,10 @@
-// one picker for everything: the command palette, models, sessions, mode, thinking. type to filter, arrows and Enter to pick
-use super::theme::pal;
+// one picker for everything: the command palette, models, effort, mode (overlay.ts picker). type to filter,
+// arrows or ctrl+n/p and Enter to pick, esc or a click outside to close
+use super::icons::ic;
+use super::overlay::{self, kbd, Place};
+use super::theme::{em, geo, pal, u};
 use crate::state::app::Pith;
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::kbd::Kbd;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable, WindowExt};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::assets::IconName;
@@ -15,141 +16,139 @@ pub struct PickItem {
     pub group: Option<SharedString>,
     pub right: Option<SharedString>,
     pub on: bool,
-    pub icon: Option<IconName>,
-    pub keys: Option<Keystroke>,
+    pub keys: Option<SharedString>,
     pub tags: Vec<SharedString>,
     pub run: Rc<dyn Fn(&mut Window, &mut App)>,
 }
 
 impl PickItem {
     pub fn new(label: impl Into<SharedString>, run: impl Fn(&mut Window, &mut App) + 'static) -> Self {
-        PickItem { label: label.into(), hint: None, group: None, right: None, on: false, icon: None, keys: None, tags: vec![], run: Rc::new(run) }
+        PickItem { label: label.into(), hint: None, group: None, right: None, on: false, keys: None, tags: vec![], run: Rc::new(run) }
     }
     pub fn hint(mut self, h: impl Into<SharedString>) -> Self { let h = h.into(); self.hint = if h.is_empty() { None } else { Some(h) }; self }
     pub fn group(mut self, g: impl Into<SharedString>) -> Self { self.group = Some(g.into()); self }
-    pub fn right(mut self, r: impl Into<SharedString>) -> Self { self.right = Some(r.into()); self }
+    pub fn right(mut self, r: impl Into<SharedString>) -> Self { let r = r.into(); self.right = if r.is_empty() { None } else { Some(r) }; self }
     pub fn on(mut self, on: bool) -> Self { self.on = on; self }
-    pub fn icon(mut self, i: IconName) -> Self { self.icon = Some(i); self }
-    // a shortcut shown on the right, "secondary-n" is cmd on macos and ctrl elsewhere
-    pub fn keys(mut self, k: &str) -> Self { self.keys = Keystroke::parse(k).ok(); self }
+    // the webview picker had no icons; kept so callers don't have to change
+    pub fn icon(self, _: IconName) -> Self { self }
+    // the shortcut, as text ("ctrl+shift+n"). gpui's "secondary-n" spelling is turned into that
+    pub fn keys(mut self, k: &str) -> Self {
+        let k = if k.contains('+') { k.to_string() } else { k.replace("secondary", if cfg!(target_os = "macos") { "cmd" } else { "ctrl" }).replace('-', "+") };
+        self.keys = Some(k.into());
+        self
+    }
     pub fn tag(mut self, t: impl Into<SharedString>) -> Self { self.tags.push(t.into()); self }
 }
 
-// what the list draws: section labels while browsing, items
-#[derive(Clone, Copy)]
-enum Row { Head(usize), Item(usize) }
-
-const ROW_H: f32 = 34.;
-const MAX_ROWS: usize = 10;
-
 pub struct Picker {
+    title: SharedString,
     items: Vec<PickItem>,
     // indexes into items, in the order shown
     shown: Vec<usize>,
-    rows: Vec<Row>,
-    heads: Vec<Option<SharedString>>,
     // index into shown
     sel: usize,
     input: Entity<InputState>,
-    scroll: UniformListScrollHandle,
+    scroll: ScrollHandle,
     // the pointer only takes over the selection when it actually moves, not when the list scrolls under it
     mouse: Option<Point<Pixels>>,
     _sub: Subscription,
 }
 
-// subsequence match, consecutive letters and word starts score higher
+// composer.ts fuzzy: letters in order, runs and word starts score more, a plain substring a lot more
 pub fn fuzzy(q: &str, s: &str) -> f32 {
-    let (q, s) = (q.to_lowercase(), s.to_lowercase());
     if q.is_empty() { return 1.; }
-    if let Some(i) = s.find(&q) { return 10. - (i as f32).min(5.) * 0.2 + if i == 0 { 2. } else { 0. }; }
-    let sc: Vec<char> = s.chars().collect();
-    let (mut score, mut at, mut run) = (0., 0usize, 0.);
-    for c in q.chars() {
-        let Some(off) = sc[at..].iter().position(|x| *x == c) else { return 0. };
-        let i = at + off;
-        run = if off == 0 && at > 0 { run + 1. } else { 0. };
-        score += 1. + run + if i == 0 || !sc[i - 1].is_alphanumeric() { 1. } else { 0. };
-        at = i + 1;
+    let q: Vec<char> = q.to_lowercase().chars().collect();
+    let t: Vec<char> = s.to_lowercase().chars().collect();
+    let (mut score, mut j, mut run) = (0f32, 0usize, 0f32);
+    for i in 0..t.len() {
+        if j >= q.len() { break; }
+        if t[i] == q[j] {
+            j += 1;
+            run += 1.;
+            score += 1. + run * 2. + if i == 0 || "/-_. ".contains(t[i - 1]) { 6. } else { 0. };
+        } else { run = 0.; }
     }
-    score / (q.chars().count() as f32 + 2.)
+    if j < q.len() { return 0.; }
+    let qs: String = q.iter().collect();
+    let ts: String = t.iter().collect();
+    score - t.len() as f32 * 0.02 + if ts.contains(&qs) { 12. } else { 0. }
 }
 
 impl Picker {
-    pub fn new(items: Vec<PickItem>, placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(title: &str, items: Vec<PickItem>, placeholder: &str, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder.to_string()));
         let sub = cx.subscribe_in(&input, window, |this: &mut Picker, _, ev: &InputEvent, window, cx| match ev {
-            InputEvent::Change => { this.filter(cx); cx.notify(); }
+            InputEvent::Change => { this.sel = 0; this.filter(cx); cx.notify(); }
             InputEvent::PressEnter { .. } => this.pick(window, cx),
             _ => {}
         });
-        let mut p = Picker { shown: vec![], rows: vec![], heads: vec![], items, sel: 0, input, scroll: UniformListScrollHandle::new(), mouse: None, _sub: sub };
+        let mut p = Picker { title: title.to_string().into(), shown: vec![], items, sel: 0, input, scroll: ScrollHandle::new(), mouse: None, _sub: sub };
         p.filter(cx);
-        p.sel = p.shown.iter().position(|&i| p.items[i].on).unwrap_or(0);
-        let r = p.row_of(p.sel);
-        p.scroll.scroll_to_item(r, ScrollStrategy::Center);
+        p.sel = p.items.iter().position(|i| i.on).unwrap_or(0);
         p
     }
 
     fn filter(&mut self, cx: &App) {
         let q = self.input.read(cx).value().trim().to_string();
-        self.rows.clear();
-        if q.is_empty() {
-            // browsing: grouped, groups in the order they first appear, items keep theirs
-            let mut groups: Vec<Option<SharedString>> = vec![];
-            for it in &self.items { if !groups.contains(&it.group) { groups.push(it.group.clone()); } }
-            self.shown.clear();
-            for (gi, g) in groups.iter().enumerate() {
-                if g.is_some() { self.rows.push(Row::Head(gi)); }
-                for (i, it) in self.items.iter().enumerate() {
-                    if it.group != *g { continue; }
-                    self.rows.push(Row::Item(self.shown.len()));
-                    self.shown.push(i);
-                }
-            }
-            self.heads = groups;
-        } else {
+        if q.is_empty() { self.shown = (0..self.items.len()).collect(); } else {
             let mut v: Vec<(usize, f32)> = self.items.iter().enumerate().map(|(i, it)| {
-                let rest = format!("{} {} {}", it.group.as_deref().unwrap_or(""), it.hint.as_deref().unwrap_or(""), it.tags.iter().map(|t| t.as_ref()).collect::<Vec<_>>().join(" "));
+                let rest = format!("{} {}", it.tags.first().or(it.group.as_ref()).map(|s| s.as_ref()).unwrap_or(""), it.hint.as_deref().unwrap_or(""));
                 (i, fuzzy(&q, &it.label).max(fuzzy(&q, &rest) * 0.5))
             }).filter(|x| x.1 > 0.).collect();
             v.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             self.shown = v.into_iter().map(|x| x.0).collect();
-            self.rows = (0..self.shown.len()).map(Row::Item).collect();
         }
-        self.sel = 0;
-        self.scroll.scroll_to_item(0, ScrollStrategy::Top);
+        self.sel = self.sel.min(self.shown.len().saturating_sub(1));
     }
-
-    fn row_of(&self, sel: usize) -> usize { self.rows.iter().position(|r| matches!(r, Row::Item(i) if *i == sel)).unwrap_or(0) }
 
     fn pick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(&i) = self.shown.get(self.sel) else { return };
         let run = self.items[i].run.clone();
-        window.close_dialog(cx);
+        overlay::close(window, cx);
         run(window, cx);
     }
 
     fn step(&mut self, d: isize, cx: &mut Context<Self>) {
         if self.shown.is_empty() { return; }
-        let n = self.shown.len() as isize;
-        self.sel = ((self.sel as isize + d).rem_euclid(n)) as usize;
-        let r = self.row_of(self.sel);
-        // keep a group's label in view when stepping up onto its first item
-        let top = if r > 0 && matches!(self.rows[r - 1], Row::Head(_)) { r - 1 } else { r };
-        if self.sel == 0 { self.scroll.scroll_to_item(0, ScrollStrategy::Top); }
-        else { self.scroll.scroll_to_item(if d < 0 { top } else { r }, ScrollStrategy::Nearest); }
+        self.sel = (self.sel as isize + d).clamp(0, self.shown.len() as isize - 1) as usize;
+        self.reveal();
         cx.notify();
+    }
+
+    // the list's children are group labels and rows mixed, so find the selected row's child index
+    fn reveal(&self) {
+        let browsing = self.shown.len() == self.items.len();
+        let mut child = 0;
+        let mut last: Option<&SharedString> = None;
+        for (n, &i) in self.shown.iter().enumerate() {
+            let g = self.items[i].group.as_ref();
+            if browsing && g.is_some() && g != last { child += 1; last = g; }
+            if n == self.sel { break; }
+            child += 1;
+        }
+        self.scroll.scroll_to_item(child);
     }
 }
 
 impl Render for Picker {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = pal(cx);
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (p, g) = (pal(cx), geo(cx));
+        let vp = window.viewport_size();
+        let w = (vp.width * 0.92).min(px(660. * g.scale));
+        let (body, deco) = overlay::frame(self.title.clone(), w, cx);
+        let q_empty = self.input.read(cx).value().trim().is_empty();
         let view = cx.entity();
-        let count = self.rows.len();
-        let browsing = self.input.read(cx).value().trim().is_empty();
-        v_flex().w_full()
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+        let mut rows: Vec<AnyElement> = vec![];
+        let mut last: Option<SharedString> = None;
+        for (n, &i) in self.shown.iter().enumerate() {
+            let it = &self.items[i];
+            if q_empty && it.group.is_some() && it.group != last {
+                last = it.group.clone();
+                rows.push(div().pt(u(8.)).px(u(10.)).pb(u(2.)).text_size(em(cx, 0.78)).text_color(p.dim).child(it.group.clone().unwrap_or_default()).into_any_element());
+            }
+            rows.push(row(it, n, n == self.sel, view.clone(), cx));
+        }
+        body.on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 let k = &e.keystroke;
                 let ctrl = k.modifiers.control && !k.modifiers.alt && !k.modifiers.shift;
                 match k.key.as_str() {
@@ -157,72 +156,51 @@ impl Render for Picker {
                     "up" => { this.step(-1, cx); cx.stop_propagation(); }
                     "n" if ctrl => { this.step(1, cx); cx.stop_propagation(); }
                     "p" if ctrl => { this.step(-1, cx); cx.stop_propagation(); }
-                    "pagedown" => { this.step(MAX_ROWS as isize - 1, cx); cx.stop_propagation(); }
-                    "pageup" => { this.step(-(MAX_ROWS as isize - 1), cx); cx.stop_propagation(); }
                     _ => {}
                 }
             }))
-            .child(div().px_3().py_1().child(Input::new(&self.input).prefix(Icon::new(IconName::Search).small().text_color(p.dim)).appearance(false).cleanable(false)))
-            .child(div().h_px().bg(cx.theme().border))
+            // .pk-top
+            .child(div().flex().items_center().gap(u(8.)).pt(u(14.)).px(u(14.)).pb(u(10.)).text_color(p.dim).border_b_1().border_color(p.rule)
+                .child(ic("search").size(em(cx, 1.2)).text_color(p.dim))
+                .child(div().flex_1().min_w_0().text_color(p.text).child(overlay::field(&self.input, 0., cx))))
             .child(if self.shown.is_empty() {
-                div().px_4().py_6().text_sm().text_color(p.dim).text_center().child("Nothing matches").into_any_element()
+                div().p(u(14.)).text_color(p.dim).child("nothing matches").into_any_element()
             } else {
-                div().p_1p5().child(uniform_list("picker-list", count, move |range, _, cx| {
-                    let this = view.read(cx);
-                    range.map(|r| match this.rows[r] {
-                        Row::Head(g) => group_label(this.heads[g].clone().unwrap_or_default(), cx),
-                        Row::Item(s) => {
-                            let it = &this.items[this.shown[s]];
-                            item_row(it, s, s == this.sel, browsing, view.clone(), cx)
-                        }
-                    }).collect()
-                }).track_scroll(&self.scroll).h(px((count.min(MAX_ROWS) as f32) * ROW_H))).into_any_element()
+                div().id("pk-list").max_h(vp.height * 0.56).overflow_y_scroll().track_scroll(&self.scroll).p(u(4.)).children(rows).into_any_element()
             })
+            .child(deco)
     }
 }
 
-fn group_label(label: SharedString, cx: &App) -> AnyElement {
-    let p = pal(cx);
-    h_flex().w_full().h(px(ROW_H)).px_2().pt_2().items_center().text_xs().font_weight(FontWeight::MEDIUM).text_color(p.dim).child(label).into_any_element()
-}
-
-fn item_row(it: &PickItem, s: usize, sel: bool, browsing: bool, view: Entity<Picker>, cx: &App) -> AnyElement {
+// .pk-row: mark, label, tag, hint, right, kbd
+fn row(it: &PickItem, n: usize, sel: bool, view: Entity<Picker>, cx: &App) -> AnyElement {
     let p = pal(cx);
     let (v1, v2) = (view.clone(), view);
-    h_flex().id(("pick", s)).w_full().h(px(ROW_H)).px_2().gap_2().items_center().rounded(cx.theme().radius)
-        .when(sel, |d| d.bg(cx.theme().muted))
-        // a fixed lane for the icon, or the check on the current choice, so labels line up
-        .child(h_flex().flex_none().w(px(16.)).justify_center().child(match (it.on, it.icon) {
-            (true, _) => Icon::new(IconName::Check).small().text_color(cx.theme().primary).into_any_element(),
-            (false, Some(i)) => Icon::new(i).small().text_color(p.dim).into_any_element(),
-            _ => div().into_any_element(),
-        }))
-        .child(div().flex_none().max_w(relative(0.62)).truncate().text_color(cx.theme().foreground).child(it.label.clone()))
-        .child(div().flex_1().min_w_0().truncate().text_sm().text_color(p.dim).child(it.hint.clone().unwrap_or_default()))
-        .children(it.tags.iter().map(|t| div().flex_none().text_xs().px_1p5().rounded(px(4.)).border_1().border_color(cx.theme().border).text_color(p.mid).child(t.clone())))
-        // searching mixes groups, so each row says which one it's from
-        .when(!browsing && it.right.is_none() && it.keys.is_none(), |d| d.when_some(it.group.clone(), |d, g| d.child(div().flex_none().text_xs().text_color(p.dim).child(g))))
-        .when_some(it.right.clone(), |d, r| d.child(div().flex_none().text_xs().text_color(p.dim).child(r)))
-        .when_some(it.keys.clone(), |d, k| d.child(Kbd::new(k)))
+    div().id(("pick", n)).flex().items_baseline().gap(u(10.)).px(u(10.)).py(u(4.)).rounded(u(5.)).cursor_pointer()
+        .when(sel, |d| d.bg(p.high))
+        .child(div().flex_none().w(em(cx, 0.7 * 0.6)).text_size(em(cx, 0.7)).text_color(p.accent).child(if it.on { "●" } else { "" }))
+        .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(it.label.clone()))
+        .children(it.tags.iter().map(|t| div().flex_none().text_size(em(cx, 0.78)).text_color(p.mid).whitespace_nowrap().px(u(5.)).border_1().border_color(p.line).rounded(u(4.)).child(t.clone())))
+        .when_some(it.hint.clone(), |d, h| d.child(div().flex_1().min_w_0().text_size(em(cx, 0.88)).text_color(p.dim).overflow_hidden().text_ellipsis().whitespace_nowrap().child(h)))
+        .when_some(it.right.clone(), |d, r| d.child(div().flex_none().ml_auto().text_size(em(cx, 0.82)).text_color(p.dim).whitespace_nowrap().child(r)))
+        .when_some(it.keys.clone(), |d, k| d.child(kbd(k, cx)))
         .on_mouse_move(move |e: &MouseMoveEvent, _, cx| v1.update(cx, |this, cx| {
             let moved = this.mouse.is_some_and(|m| m != e.position);
             this.mouse = Some(e.position);
-            if moved && this.sel != s { this.sel = s; cx.notify(); }
+            if moved && this.sel != n { this.sel = n; cx.notify(); }
         }))
-        .on_click(move |_, window, cx| v2.update(cx, |this, cx| { this.sel = s; this.pick(window, cx); }))
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| { cx.stop_propagation(); v2.update(cx, |this, cx| { this.sel = n; this.pick(window, cx); }) })
         .into_any_element()
 }
 
-impl Focusable for Picker {
-    fn focus_handle(&self, cx: &App) -> FocusHandle { self.input.read(cx).focus_handle(cx) }
-}
+// a picker titled `title` (the legend), "type to filter" in the box
+pub fn open(items: Vec<PickItem>, title: &str, window: &mut Window, cx: &mut App) { open_with(&title.to_lowercase(), "type to filter", items, window, cx) }
 
-pub fn open(items: Vec<PickItem>, placeholder: &str, window: &mut Window, cx: &mut App) {
-    let ph = placeholder.to_string();
-    let view = cx.new(|cx| Picker::new(items, &ph, window, cx));
-    let f = view.read(cx).focus_handle(cx);
-    window.open_dialog(cx, move |d, _, _| d.w(px(640.)).margin_top(px(88.)).p_0().close_button(false).child(view.clone()));
-    f.focus(window, cx);
+pub fn open_with(title: &str, placeholder: &str, items: Vec<PickItem>, window: &mut Window, cx: &mut App) {
+    let view = cx.new(|cx| Picker::new(title, items, placeholder, window, cx));
+    let f = view.read(cx).input.read(cx).focus_handle(cx);
+    view.read(cx).reveal();
+    overlay::show(view.into(), Some(f), Place::Top, window, cx);
 }
 
 pub fn models(window: &mut Window, cx: &mut App) {
@@ -244,33 +222,31 @@ pub fn models(window: &mut Window, cx: &mut App) {
     let Some(tab) = app.read(cx).active.clone() else { return };
     let (cur_id, cur_p) = { let t = tab.read(cx); (t.state["model"]["id"].as_str().unwrap_or("").to_string(), t.state["model"]["provider"].as_str().unwrap_or("").to_string()) };
     let mut list = app.read(cx).models.clone();
-    // the current provider first, then the rest by name
-    list.sort_by(|a, b| (a.provider != cur_p, &a.provider).cmp(&(b.provider != cur_p, &b.provider)));
+    // the current one first, then its provider's
+    list.sort_by_key(|m| (!(m.id == cur_id && m.provider == cur_p), m.provider != cur_p));
     let items = list.iter().map(|m| {
         let (t, prov, id) = (tab.clone(), m.provider.clone(), m.id.clone());
-        let mut it = PickItem::new(if m.name.is_empty() { m.id.clone() } else { m.name.clone() }, move |_, cx| t.update(cx, |t, cx| t.set_model(prov.clone(), id.clone(), cx)))
-            .group(m.provider.clone()).on(m.id == cur_id && m.provider == cur_p)
-            .hint(if !m.name.is_empty() && m.name != m.id { m.id.clone() } else { String::new() });
-        if m.reasoning { it = it.tag("Reasoning"); }
-        if m.sees { it = it.tag("Vision"); }
-        if m.context > 0 { it = it.right(super::tools::tokens(m.context)); }
-        it
+        let right = [if m.context > 0 { format!("{}k", (m.context as f64 / 1000.).round()) } else { String::new() }, if m.reasoning { "thinks".into() } else { String::new() }, if m.sees { "sees".into() } else { String::new() }]
+            .into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+        PickItem::new(m.id.clone(), move |_, cx| t.update(cx, |t, cx| t.set_model(prov.clone(), id.clone(), cx)))
+            .group(m.provider.clone()).tag(m.provider.clone()).on(m.id == cur_id && m.provider == cur_p)
+            .hint(if !m.name.is_empty() && m.name != m.id { m.name.clone() } else { String::new() }).right(right)
     }).collect();
-    open(items, "Switch model", window, cx);
+    open_with("model", "search models", items, window, cx);
 }
 
-// the mode picker, from the status line and the composer's legend
+// the mode picker, from the status line, the palette and the composer's legend
 pub fn modes(tab: Entity<crate::state::tab::Tab>, window: &mut Window, cx: &mut App) {
     use crate::state::tab::Mode;
     let cur = tab.read(cx).mode;
     let items = Mode::ALL.into_iter().map(|m| { let t = tab.clone(); PickItem::new(m.as_str(), move |_, cx| t.update(cx, |t, cx| t.set_mode(m, cx))).hint(m.hint()).on(m == cur) }).collect();
-    open(items, "type to filter", window, cx);
+    open_with("mode", "type to filter", items, window, cx);
 }
 
 // thinking effort, for models that take one
 pub fn effort(tab: Entity<crate::state::tab::Tab>, window: &mut Window, cx: &mut App) {
     let (levels, cur) = { let t = tab.read(cx); (t.levels.clone(), t.state["thinkingLevel"].as_str().unwrap_or("").to_string()) };
-    if levels.is_empty() { tab.update(cx, |_, cx| cx.emit(crate::state::tab::TabEvent::Toast(crate::state::tab::Level::Info, "this model doesn't take an effort level".into()))); return; }
+    if levels.is_empty() { Pith::global(cx).update(cx, |a, cx| a.toast(crate::state::tab::Level::Info, "this model doesn't take an effort level", cx)); return; }
     let items = levels.into_iter().map(|l| { let (t, l2) = (tab.clone(), l.clone()); PickItem::new(l.clone(), move |_, cx| t.update(cx, |t, cx| t.set_thinking(l2.clone(), cx))).on(l == cur) }).collect();
-    open(items, "type to filter", window, cx);
+    open_with("effort", "type to filter", items, window, cx);
 }

@@ -1,4 +1,5 @@
 // The bar under the windows, waybar-ish: what the session is doing on the left, what it costs on the right
+use super::overlay::Tip as _;
 use super::theme::{em, pal, u};
 use crate::state::app::{Pith, View};
 use crate::state::tab::{Mode, Status, Tab};
@@ -92,6 +93,7 @@ impl Render for StatusLine {
         let tab = t.read(cx);
         if !self.branch.contains_key(&tab.cwd) { self.branch.insert(tab.cwd.clone(), String::new()); let c = tab.cwd.clone(); self.load_branch(c, cx); }
         let tab = t.read(cx);
+        // TODO(panes): a watched subagent tab says "agent", or "work" while its own process runs it (statusline.ts)
         let word = match tab.status {
             Status::Running => if tab.compacting { "compact" } else { "work" },
             Status::Starting => "start",
@@ -114,29 +116,32 @@ impl Render for StatusLine {
         let ctx_known = !cu["tokens"].is_null();
         let statuses: Vec<String> = tab.statuses.iter().map(|(_, v)| v.clone()).collect();
         let cwd = super::tools::tilde(&tab.cwd);
+        let full = tab.cwd.clone();
+        let ctx_tip = format!("context {} / {}", if ctx_known { super::page::tokens(cu["tokens"].as_f64().unwrap_or(0.)) } else { "?".into() }, super::page::tokens(window_ctx));
+        let mode_tip = format!("{} (shift+tab)", mode.hint());
         let running = tab.running();
         let _ = window;
         let t1 = t.clone();
         let app = self.app.clone();
         row
             .child(block(word, running, cx))
-            .child(seg(true, cx).child(cwd))
+            .child(seg(true, cx).id("st-cwd").tip(full, cx).child(cwd))
             .when(!br.is_empty(), |d| d.child(seg(false, cx).text_color(p.dim).child(format!("⎇ {br}"))))
             .children(statuses.into_iter().map(|s| seg(false, cx).text_color(p.tertiary).child(s)))
             .child(div().flex_1())
-            .child(seg(true, cx).id("st-mode").cursor_pointer().text_color(mode_color(mode, cx)).hover(|s| s.opacity(0.85)).child(mode.as_str())
+            .child(seg(true, cx).id("st-mode").cursor_pointer().text_color(mode_color(mode, cx)).hover(|s| s.text_color(pal(cx).text)).tip(mode_tip, cx).child(mode.as_str())
                 .on_click(move |_, window, cx| super::picker::modes(t1.clone(), window, cx)))
-            .child(seg(false, cx).id("st-model").cursor_pointer().hover(|s| s.text_color(pal(cx).text)).child(model_id.unwrap_or_else(|| "model".into()))
+            .child(seg(false, cx).id("st-model").cursor_pointer().tip("model (ctrl+m)", cx).hover(|s| s.text_color(pal(cx).text)).child(model_id.unwrap_or_else(|| "model".into()))
                 .on_click(|_, window, cx| super::picker::models(window, cx)))
-            .when(reasoning, |d| d.child(seg(false, cx).id("st-effort").cursor_pointer().hover(|s| s.text_color(pal(cx).text)).child(level)
+            .when(reasoning, |d| d.child(seg(false, cx).id("st-effort").cursor_pointer().tip("effort (ctrl+e)", cx).hover(|s| s.text_color(pal(cx).text)).child(level)
                 .on_click({ let t = t.clone(); move |_, window, cx| super::picker::effort(t.clone(), window, cx) })))
-            .when(window_ctx > 0., |d| d.child(seg(false, cx).flex().items_center().gap(u(6.))
+            .when(window_ctx > 0., |d| d.child(seg(false, cx).id("st-ctx").tip(ctx_tip, cx).flex().items_center().gap(u(6.))
                 .child(div().w(u(54.)).h(u(6.)).rounded(u(3.)).bg(p.high).overflow_hidden()
                     .child(div().h_full().rounded(u(3.)).w(relative((pct.min(100.) / 100.) as f32)).bg(if pct > 80. { p.gold } else { p.mid })))
                 .child(if ctx_known { format!("{}%", pct.round()) } else { "—".into() })))
             .when(has_stats, |d| d
                 .child(seg(false, cx).text_color(p.dim).child(format!("{}↑ {}↓", super::page::tokens(tin), super::page::tokens(tout))))
-                .child(seg(false, cx).id("st-cost").cursor_pointer().text_color(p.text).hover(|s| s.opacity(0.85)).child(super::page::cost(cost))
+                .child(seg(false, cx).id("st-cost").cursor_pointer().text_color(p.text).tip("usage", cx).child(super::page::cost(cost))
                     .on_click(move |_, _, cx| app.update(cx, |a, cx| a.show(View::Usage, cx)))))
             .child(seg(false, cx).text_color(p.dim).child(format!("{live} live")))
     }

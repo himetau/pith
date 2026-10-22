@@ -140,9 +140,21 @@ impl Pith {
             Msg::Rec(_, rec) => {
                 let background = self.active.as_ref() != Some(&tab) || self.view != View::Chat;
                 tab.update(cx, |t, cx| {
+                    let asks = t.asks.len();
                     t.on_event(&rec, cx);
                     if background && rec["type"] == "agent_settled" { t.unread = true; }
-                    if rec["type"] == "agent_settled" && rec["aborted"] != true { crate::platform::notify(&t.title(), "Done", cx); }
+                    // chat.ts: the reply's start, or "finished", and how many questions wait. aborted runs too
+                    if rec["type"] == "agent_settled" {
+                        let text = t.items.iter().rev().find_map(|i| if let super::tab::ItemKind::Assistant(a) = &i.kind {
+                            Some(a.blocks.iter().filter_map(|b| if let Some(super::tab::Block::Text(x)) = b { Some(x.as_str()) } else { None }).collect::<Vec<_>>().join(" "))
+                        } else { None }).unwrap_or_default();
+                        let mut body: String = text.chars().take(180).collect();
+                        if body.is_empty() { body = "finished".into(); }
+                        let n = t.asks.len();
+                        if n > 0 { body += &format!(" · {n} question{} waiting", if n == 1 { "" } else { "s" }); }
+                        crate::platform::notify(&t.title(), &body, cx);
+                    }
+                    if t.asks.len() > asks { crate::platform::notify(&t.title(), "needs your answer", cx); }
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
@@ -280,6 +292,30 @@ impl Pith {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(std::time::Duration::from_millis(ms)).await;
             let _ = this.update(cx, |a, cx| { a.toasts.retain(|t| t.id != id); cx.notify(); });
+        }).detach();
+    }
+
+    // home, set up for a chat (ctrl+n) or a design in the design folder (ctrl+shift+n)
+    pub fn new_home(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        self.home_kind = kind;
+        if kind == Kind::Design { if let Some(d) = self.settings["designDir"].as_str().filter(|d| !d.is_empty()) { self.home_cwd = d.to_string(); } }
+        self.show(View::Home, cx);
+    }
+
+    pub fn pinned(&self) -> Vec<String> { super::tab::strings(&self.settings["pinned"]) }
+    pub fn toggle_pin(&mut self, file: &str, cx: &mut Context<Self>) {
+        let mut p = self.pinned();
+        if p.iter().any(|f| f == file) { p.retain(|f| f != file); } else { p.push(file.to_string()); }
+        self.save_settings(json!({ "pinned": p }), cx);
+    }
+
+    // into the system trash, never deleted outright. its tab goes first
+    pub fn trash(&mut self, file: &str, cx: &mut Context<Self>) {
+        if let Some(t) = self.tabs.iter().find(|t| t.read(cx).file.as_deref() == Some(file)).cloned() { self.close(&t, cx); }
+        let f = file.to_string();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_spawn(async move { trash::delete(&f).map_err(|e| e.to_string()) }).await;
+            let _ = this.update(cx, |a, cx| { if let Err(e) = r { a.toast(Level::Error, format!("couldn't trash it: {e}"), cx); } a.refresh_sessions(cx); });
         }).detach();
     }
 
