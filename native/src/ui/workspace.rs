@@ -234,8 +234,7 @@ impl Workspace {
             return (legend(Side::L, gutter, cx).child(legend_t(name, focused, cx)), None);
         };
         let (title, cwd, design) = { let t = t.read(cx); (t.title(), super::tools::tilde(&t.cwd), t.kind == Kind::Design) };
-        let side_open = app.side;
-        let cur = self.side.as_ref().map(|s| s.read(cx).current());
+        let cur = t.read(cx).pane;
         let l = legend(Side::L, gutter, cx).max_w(relative(0.8))
             .when(design, |d| d.child(legend_tag("design", cx)))
             .child(legend_t(title, focused, cx).flex_none().max_w(u(46. * 8.)))
@@ -245,11 +244,10 @@ impl Workspace {
         let fsz = super::theme::geo(cx).fs * 0.84 * 1.45;
         let r = legend(Side::R, gutter, cx)
             .children(panes.into_iter().map(|(pane, icon, tip)| {
-                let on = side_open && cur == Some(pane);
-                let a = self.app.clone();
+                let on = cur == Some(pane);
                 legend_btn(SharedString::from(format!("lp-{tip}")), on, cx).px(u(4.)).tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
                     .child(Icon::new(icon).size(u(fsz)))
-                    .on_click(move |_, _, cx| if on { a.update(cx, |a, cx| { a.side = false; cx.notify(); }) } else { super::panes::open(pane, cx) })
+                    .on_click(move |_, _, cx| super::panes::toggle(pane, cx))
             }))
             .child(legend_btn("lp-more", false, cx).px(u(4.)).child(Icon::new(IconName::Ellipsis).size(u(fsz)))
                 .on_click(cx.listener(|this, _, window, cx| this.palette(window, cx))));
@@ -333,7 +331,8 @@ impl Workspace {
             row = row.child(super::frame::win(cx).id("win-pane").w(u(side_w)).flex_none()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { if this.focus_win != 2 { this.focus_win = 2; cx.notify(); } }))
                 .child(div().flex_1().min_h_0().flex().flex_col().overflow_hidden().rounded(u(g.round)).child(side))
-                .child(super::frame::edge(super::frame::win_color(fw == 2, cx), cx)));
+                .child(super::frame::edge(super::frame::win_color(fw == 2, cx), cx))
+                .map(|d| { let (l, r) = SidePanel::legends(cx); d.child(l).child(r) }));
         }
         v_flex().flex_1().min_h_0().gap(u(g.gap)).child(row).child(div().h(u(26.)).flex_none().child(self.status.clone()))
     }

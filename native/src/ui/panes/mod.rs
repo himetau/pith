@@ -1,23 +1,23 @@
-// The panel on the right: what the session changed, the project's files, a shell in its folder, running subagents.
-// one panel per window. it follows the active session and remembers which pane each session was on;
-// each session keeps its own shell for as long as its tab is open
+// The window to the right of the chat. One per session (Tab::pane, None when closed): web, preview, changes, files,
+// agents, term. it follows the active session; each session keeps its own shell for as long as its tab is open.
+// the window frame and its legends are workspace.rs's, the tabs in them come from SidePanel::legends
 mod agents;
 mod changes;
+mod code;
 mod files;
 mod terminal;
 mod web;
 
-use super::theme::pal;
-use super::workspace::TOP;
+use super::frame::{legend, legend_btn, Side};
+use super::theme::{em, fade, geo, pal, u};
 use crate::state::app::Pith;
-use crate::state::tab::{How, Tab, TabEvent};
+use crate::state::hub::Hub;
+use crate::state::tab::{Tab, TabEvent};
 use agents::Agents;
 use changes::{Changes, ChangesEvent};
 use files::Files;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::{h_flex, v_flex, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::collections::HashMap;
@@ -28,28 +28,48 @@ use web::WebPane;
 pub fn bind_keys(cx: &mut App) { terminal::bind_keys(cx); }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Pane { Changes, Files, Terminal, Agents, Browser, Preview }
-// browser and preview only get a tab once the session has used them
-const PANES: [(Pane, &str); 6] = [(Pane::Changes, "Changes"), (Pane::Files, "Files"), (Pane::Terminal, "Terminal"), (Pane::Agents, "Agents"), (Pane::Browser, "Browser"), (Pane::Preview, "Preview")];
+pub enum Pane { Browser, Preview, Changes, Files, Agents, Terminal }
+// the legend's tabs, in order, with what alt+1…6 opens
+pub const PANES: [(Pane, &str, &str); 6] = [(Pane::Browser, "web", "alt+1"), (Pane::Preview, "preview", "alt+2"), (Pane::Changes, "changes", "alt+3"),
+    (Pane::Files, "files", "alt+4"), (Pane::Agents, "agents", "alt+5"), (Pane::Terminal, "term", "alt+6")];
 
 pub const MIN_W: f32 = 320.;
 pub const MAX_W: f32 = 900.;
 
-// a file asked for from outside the panel (a path in the chat). it opens the panel and lands in Files
+// the active session's side window on a pane (act.openPane)
+pub fn open(pane: Pane, cx: &mut App) {
+    let app = Pith::global(cx);
+    let Some(t) = app.read(cx).active.clone() else { return };
+    app.update(cx, |a, cx| a.set_pane(&t, Some(pane), cx));
+}
+// the pane that's open closes, any other opens (act.togglePane: the header icons, alt+1…6, ctrl+\ with the current one)
+#[allow(dead_code)]
+pub fn toggle(pane: Pane, cx: &mut App) {
+    let app = Pith::global(cx);
+    let Some(t) = app.read(cx).active.clone() else { return };
+    app.update(cx, |a, cx| a.toggle_pane(&t, pane, cx));
+}
+#[allow(dead_code)]
+pub fn close(cx: &mut App) {
+    let app = Pith::global(cx);
+    let Some(t) = app.read(cx).active.clone() else { return };
+    app.update(cx, |a, cx| a.set_pane(&t, None, cx));
+}
+// /browser [url]: the web pane, at that page when there's one
+#[allow(dead_code)]
+pub fn browse(url: Option<&str>, cx: &mut App) {
+    let app = Pith::global(cx);
+    let Some(t) = app.read(cx).active.clone() else { return };
+    if let Some(u) = url.map(str::trim).filter(|u| !u.is_empty()) { let id = t.read(cx).id.clone(); web::go_to(&t, &id, u, cx); }
+    app.update(cx, |a, cx| a.set_pane(&t, Some(Pane::Browser), cx));
+}
+
+// a file asked for from outside the panel (a path in the chat, a tool row). it opens the panel and lands in Files
 static REVEAL: Mutex<Option<(String, Option<usize>)>> = Mutex::new(None);
 #[allow(dead_code)]
 pub fn reveal(path: &str, line: Option<usize>, cx: &mut App) {
     *REVEAL.lock().unwrap() = Some((path.to_string(), line));
-    Pith::global(cx).update(cx, |a, cx| { a.side = true; cx.notify(); });
-}
-
-// a pane asked for from outside the panel (/diff, /terminal): opens the panel on it
-static OPEN: Mutex<Option<Pane>> = Mutex::new(None);
-// for callers already inside an update of the app state: they set app.side themselves
-pub fn request(pane: Pane) { *OPEN.lock().unwrap() = Some(pane); }
-pub fn open(pane: Pane, cx: &mut App) {
-    request(pane);
-    Pith::global(cx).update(cx, |a, cx| { a.side = true; cx.notify(); });
+    open(Pane::Files, cx);
 }
 
 struct ResizeDrag;
@@ -61,8 +81,8 @@ impl Render for Ghost {
 pub struct SidePanel {
     app: Entity<Pith>,
     tab: Option<Entity<Tab>>,
-    open: bool,
-    pane: HashMap<EntityId, Pane>,
+    // what's on screen, so a pane only gets shown again when it changes
+    shown: Option<(EntityId, Pane)>,
     changes: Entity<Changes>,
     files: Entity<Files>,
     agents: Entity<Agents>,
@@ -82,8 +102,8 @@ impl SidePanel {
         let changes = cx.new(Changes::new);
         let files = cx.new(|cx| Files::new(window, cx));
         let agents = cx.new(Agents::new);
-        let browser = cx.new(|cx| WebPane::new(web::Kind::Browser, cx));
-        let preview = cx.new(|cx| WebPane::new(web::Kind::Preview, cx));
+        let browser = cx.new(|cx| WebPane::new(web::Kind::Browser, window, cx));
+        let preview = cx.new(|cx| WebPane::new(web::Kind::Preview, window, cx));
         let subs = vec![
             cx.observe_in(&app, window, |this, _, window, cx| this.sync(window, cx)),
             cx.observe(&agents, |_, _, cx| cx.notify()),
@@ -91,33 +111,35 @@ impl SidePanel {
             cx.subscribe_in(&changes, window, |this, _, ev: &ChangesEvent, window, cx| match ev {
                 ChangesEvent::OpenFile(path, line) => this.open_file(path.clone(), Some(*line), window, cx),
             }),
+            cx.subscribe_in(&files, window, |this, _, ev: &files::FilesEvent, window, cx| match ev {
+                files::FilesEvent::Lightbox(path) => {
+                    let _ = this;
+                    super::lightbox::open(super::lightbox::Src::Path(path.clone()), None, window, cx);
+                }
+            }),
         ];
         let mut this = SidePanel {
-            app, tab: None, open: false, pane: HashMap::new(), changes, files, agents, terms: HashMap::new(), browser, preview,
+            app, tab: None, shown: None, changes, files, agents, terms: HashMap::new(), browser, preview,
             stale: true, save_w: None, tab_sub: None, _subs: subs,
         };
         this.sync(window, cx);
         this
     }
 
-    pub fn current(&self) -> Pane { self.pane() }
-    fn pane(&self) -> Pane { self.tab.as_ref().and_then(|t| self.pane.get(&t.entity_id()).copied()).unwrap_or(Pane::Changes) }
+    pub fn current(&self, cx: &App) -> Option<Pane> { self.tab.as_ref().and_then(|t| t.read(cx).pane) }
 
-    // runs on every app notify, so it only does real work when the session, or the panel's visibility, moved
+    // runs on every app notify, so it only does real work when the session or its pane moved
     fn sync(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (active, open, live) = {
+        let (active, side, live) = {
             let a = self.app.read(cx);
             (a.active.clone(), a.side, a.tabs.iter().map(|t| t.entity_id()).collect::<std::collections::HashSet<_>>())
         };
-        if self.terms.len() + self.pane.len() > 0 {
-            // a closed session takes its shell with it
-            let gone: Vec<EntityId> = self.terms.keys().chain(self.pane.keys()).filter(|k| !live.contains(k)).copied().collect();
-            for k in gone {
-                self.terms.remove(&k);
-                self.pane.remove(&k);
-                self.changes.update(cx, |c, _| c.forget(k));
-                self.files.update(cx, |f, _| f.forget(k));
-            }
+        // a closed session takes its shell with it
+        let gone: Vec<EntityId> = self.terms.keys().filter(|k| !live.contains(k)).copied().collect();
+        for k in gone {
+            self.terms.remove(&k);
+            self.changes.update(cx, |c, _| c.forget(k));
+            self.files.update(cx, |f, _| f.forget(k));
         }
         let moved = active.as_ref().map(|t| t.entity_id()) != self.tab.as_ref().map(|t| t.entity_id());
         if moved {
@@ -129,53 +151,46 @@ impl SidePanel {
                 _ => {}
             }));
         }
-        let shown = open && !self.open;
-        self.open = open;
-        let asked = OPEN.lock().unwrap().take();
-        if let (Some(pane), Some(tab)) = (asked, self.tab.clone()) { self.pane.insert(tab.entity_id(), pane); self.show_pane(false, window, cx); return; }
-        if let Some((path, line)) = REVEAL.lock().unwrap().take() {
-            if self.tab.is_some() { self.open_file(path, line, window, cx); return; }
+        let Some(tab) = self.tab.clone() else { return };
+        // app.side is the open flag the rest of the window toggles; the session's own pane follows it
+        let pane = tab.read(cx).pane;
+        if !moved && side != pane.is_some() {
+            let want = if side { Some(Pane::Browser) } else { None };
+            tab.update(cx, |t, _| t.pane = want);
         }
-        if open && (moved || shown) { self.show_pane(false, window, cx); }
+        if let Some((path, line)) = REVEAL.lock().unwrap().take() { self.open_file(path, line, window, cx); return; }
+        let now = tab.read(cx).pane.map(|p| (tab.entity_id(), p));
+        if now != self.shown {
+            let focus = now.is_some_and(|(_, p)| p == Pane::Terminal);
+            self.show_pane(focus, window, cx);
+        }
     }
 
     fn touched(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stale = true;
-        if self.open && self.pane() == Pane::Changes { self.show_pane(false, window, cx); }
+        if self.current(cx) == Some(Pane::Changes) { self.show_pane(false, window, cx); }
     }
 
     fn show_pane(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(tab) = self.tab.clone() else { return };
         let (id, cwd) = (tab.entity_id(), tab.read(cx).cwd.clone());
-        match self.pane() {
-            Pane::Changes => {
-                if self.stale { self.stale = false; self.changes.update(cx, |c, cx| c.show(id, &cwd, cx)); }
-            }
-            Pane::Files => {
-                self.files.update(cx, |f, cx| f.show(id, &cwd, cx));
-                if focus { let h = self.files.read(cx).find_handle(cx); h.focus(window, cx); }
-            }
-            Pane::Terminal => {
+        let pane = tab.read(cx).pane;
+        self.shown = pane.map(|p| (id, p));
+        match pane {
+            Some(Pane::Changes) => { if self.stale { self.stale = false; self.changes.update(cx, |c, cx| c.show(&tab, cx)); } }
+            Some(Pane::Files) => self.files.update(cx, |f, cx| f.show(id, &cwd, cx)),
+            Some(Pane::Terminal) => {
                 let t = self.terms.entry(id).or_insert_with(|| cx.new(|cx| TermView::new(cwd, window, cx))).clone();
                 if focus { let h = t.read(cx).focus_handle(); h.focus(window, cx); }
             }
-            Pane::Agents => {}
-            Pane::Browser => self.browser.update(cx, |w, cx| w.show(&tab.read(cx).id.clone(), cx)),
-            Pane::Preview => self.preview.update(cx, |w, cx| w.show(&tab.read(cx).id.clone(), cx)),
+            Some(Pane::Agents) | None => {}
+            Some(Pane::Browser) => self.browser.update(cx, |w, cx| w.show(&tab, cx)),
+            Some(Pane::Preview) => self.preview.update(cx, |w, cx| w.show(&tab, cx)),
         }
-        let pane = self.pane();
         // snapshots stop while a page isn't on screen
-        if pane != Pane::Browser || !self.open { self.browser.update(cx, |w, _| w.hide()); }
-        if pane != Pane::Preview || !self.open { self.preview.update(cx, |w, _| w.hide()); }
+        if pane != Some(Pane::Browser) { self.browser.update(cx, |w, _| w.hide()); }
+        if pane != Some(Pane::Preview) { self.preview.update(cx, |w, _| w.hide()); }
         cx.notify();
-    }
-
-    fn set_pane(&mut self, pane: Pane, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = &self.tab else { return };
-        self.pane.insert(tab.entity_id(), pane);
-        // switching to Changes always looks again: it's cheap and the tree may have moved under it
-        if pane == Pane::Changes { self.stale = true; }
-        self.show_pane(true, window, cx);
     }
 
     fn open_file(&mut self, path: String, line: Option<usize>, window: &mut Window, cx: &mut Context<Self>) {
@@ -183,7 +198,8 @@ impl SidePanel {
         let cwd = tab.read(cx).cwd.clone();
         // git's patch paths can keep their b/ prefix; drop it when the plain path is the real one
         let path = match path.strip_prefix("b/") { Some(p) if !std::path::Path::new(&cwd).join(&path).exists() => p.to_string(), _ => path };
-        self.pane.insert(tab.entity_id(), Pane::Files);
+        tab.update(cx, |t, _| t.pane = Some(Pane::Files));
+        self.app.update(cx, |a, _| a.side = true);
         self.files.update(cx, |f, cx| { f.show(tab.entity_id(), &cwd, cx); f.open_path(tab.entity_id(), &path, line, cx); });
         self.show_pane(false, window, cx);
     }
@@ -201,86 +217,131 @@ impl SidePanel {
         }));
     }
 
-    fn strip(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    // the side window's legends for workspace.rs to put on its border: the pane tabs on the left, a close on the right
+    pub fn legends(cx: &mut App) -> (Div, Div) {
         let p = pal(cx);
-        let t = cx.theme().clone();
-        let cur = self.pane();
-        let running = self.agents.read(cx).running_count();
-        let busy = self.changes.read(cx).busy;
-        h_flex().h(px(TOP)).flex_none().pl_2().pr_2().gap_0p5().items_center().window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |_, window, _| if !cfg!(target_os = "macos") { window.start_window_move() })
-            .children(PANES.iter().filter(|(pane, _)| self.has(*pane, cx)).map(|(pane, label)| {
-                let (pane, on) = (*pane, *pane == cur);
-                h_flex().id(*label).h(px(26.)).px_2p5().gap_1p5().items_center().rounded(t.radius).text_sm()
-                    .text_color(if on { t.foreground } else { p.dim })
-                    .when(on, |d| d.bg(t.muted).font_weight(FontWeight::MEDIUM))
-                    // always styled on hover, or a tab that was hovered when picked keeps looking hovered
-                    .hover(|s| s.text_color(t.foreground))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(*label)
-                    .when(pane == Pane::Agents && running > 0, |d| d.child(
-                        div().px_1p5().h(px(16.)).flex().items_center().rounded_full().bg(t.primary.opacity(0.16)).text_xs().text_color(t.primary).child(running.to_string())))
-                    .on_click(cx.listener(move |this, _, window, cx| this.set_pane(pane, window, cx)))
-            }))
-            .child(div().flex_1())
-            .when(cur == Pane::Changes, |d| d.child(div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(
-                if busy { div().size(px(24.)).flex().items_center().justify_center().child(Spinner::new().xsmall().color(p.dim)).into_any_element() }
-                else { Button::new("ch-refresh").icon(IconName::RefreshCw).ghost().xsmall().tooltip("Refresh")
-                    .on_click(cx.listener(|this, _, _, cx| this.changes.update(cx, |c, cx| c.refresh(cx)))).into_any_element() })))
+        let app = Pith::global(cx);
+        let tab = app.read(cx).active.clone();
+        let cur = tab.as_ref().and_then(|t| t.read(cx).pane);
+        let running = Hub::global(cx).read(cx).running_count();
+        let fs = geo(cx).fs * 0.84;
+        let l = legend(Side::L, p.gutter, cx).children(PANES.iter().map(|&(pane, label, keys)| {
+            let (app, tab) = (app.clone(), tab.clone());
+            legend_btn(SharedString::from(format!("sp-{label}")), cur == Some(pane), cx).px(u(5.))
+                .tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(format!("{label} ({keys})")).build(w, cx))
+                .child(label)
+                .when(pane == Pane::Agents && running > 0, |d| d.child(div().min_w(u(fs * 0.85 * 1.3)).flex().justify_center().rounded(u(3.)).bg(p.primary)
+                    .text_color(p.on_primary).text_size(u(fs * 0.85)).child(running.to_string())))
+                .on_click(move |_, _, cx| if let Some(t) = &tab { app.update(cx, |a, cx| a.set_pane(t, Some(pane), cx)); })
+        }));
+        let r = legend(Side::R, p.gutter, cx).child(legend_btn("sp-close", false, cx)
+            .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("close (ctrl+\\)").build(w, cx))
+            .child(Icon::new(IconName::X).size(u(fs * 1.2)))
+            .on_click(move |_, _, cx| if let Some(t) = &tab { app.update(cx, |a, cx| a.set_pane(t, None, cx)); }));
+        (l, r)
     }
 
-    fn has(&self, pane: Pane, cx: &App) -> bool {
-        let Some(tab) = &self.tab else { return !matches!(pane, Pane::Browser | Pane::Preview) };
-        let t = tab.read(cx);
-        match pane {
-            Pane::Browser => crate::core::web::page(&crate::core::browser::page_id(&t.id)).is_some(),
-            Pane::Preview => t.preview.is_some(),
-            _ => true,
-        }
-    }
-
-    fn changes_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        let (branch, n, add, del) = self.changes.read(cx).summary()?;
+    fn terminal(&self, id: EntityId, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
-        let t = cx.theme();
+        let Some(term) = self.terms.get(&id).cloned() else { return div().flex_1().into_any_element() };
+        let cwd = self.tab.as_ref().map(|t| super::tools::tilde(&t.read(cx).cwd)).unwrap_or_default();
+        let (t1, t2) = (term.clone(), term.clone());
         let tab = self.tab.clone();
-        Some(h_flex().h(px(34.)).flex_none().px_3().gap_2().items_center().border_b_1().border_color(t.border).text_sm()
-            .child(changes::branch_icon().text_color(p.dim))
-            .child(div().min_w_0().truncate().text_color(p.mid).child(branch))
-            .when(n > 0, |d| d
-                .child(div().flex_none().text_xs().text_color(p.dim).child(if n == 1 { "1 file".to_string() } else { format!("{n} files") }))
-                .child(h_flex().flex_none().gap_1p5().text_xs().font_family(t.mono_font_family.clone())
-                    .child(div().text_color(p.green).child(format!("+{add}")))
-                    .child(div().text_color(p.red).child(format!("−{del}")))))
-            .child(div().flex_1())
-            .when(n > 0, |d| d.child(Button::new("ch-review").label("Review").ghost().xsmall().tooltip("Ask the session to review these changes")
-                .on_click(move |_, _, cx| if let Some(t) = &tab { t.update(cx, |t, cx| t.send("/review".into(), vec![], How::Auto, cx)); }))))
+        v_flex().flex_1().min_h_0()
+            .child(pbar(cx).child(path_label(cwd, cx))
+                .child(pb("tm-quote", false, cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("quote the selection into the chat").build(w, cx))
+                    .child(pb_icon(IconName::Copy, cx)).child("to chat")
+                    .on_click(move |_, _, cx| {
+                        let sel = t1.read(cx).selection().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                        let app = Pith::global(cx);
+                        match (sel, &tab) {
+                            (Some(sel), Some(tab)) => {
+                                let n = sel.split('\n').count();
+                                tab.update(cx, |_, cx| cx.emit(TabEvent::Quote { label: format!("terminal  ·  {n} lines"), text: format!("terminal output:\n{sel}") }));
+                            }
+                            _ => app.update(cx, |a, cx| a.toast(crate::state::tab::Level::Info, "select some terminal output first", cx)),
+                        }
+                    }))
+                .child(pb("tm-new", false, cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("new shell").build(w, cx))
+                    .child(pb_icon(IconName::RotateCw, cx))
+                    .on_click(move |_, window, cx| t2.update(cx, |t, cx| t.new_shell(window, cx)))))
+            .child(div().flex_1().min_h_0().bg(p.surface_low).child(term))
+            .into_any_element()
     }
 }
 
 impl Render for SidePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = pal(cx);
-        let t = cx.theme().clone();
         let tab = self.tab.as_ref().map(|t| t.entity_id());
-        let body: AnyElement = match (self.pane(), tab) {
-            (_, None) => v_flex().flex_1().items_center().justify_center().text_sm().text_color(p.dim).child("Open a session to see its files").into_any_element(),
-            (Pane::Changes, _) => v_flex().flex_1().min_h_0().children(self.changes_bar(cx)).child(div().flex_1().min_h_0().child(self.changes.clone())).into_any_element(),
-            (Pane::Files, _) => div().flex_1().min_h_0().child(self.files.clone()).into_any_element(),
-            (Pane::Terminal, Some(id)) => match self.terms.get(&id) {
-                Some(term) => div().flex_1().min_h_0().border_t_1().border_color(t.border).child(term.clone()).into_any_element(),
-                None => div().flex_1().into_any_element(),
-            },
-            (Pane::Agents, _) => div().flex_1().min_h_0().border_t_1().border_color(t.border).child(self.agents.clone()).into_any_element(),
-            (Pane::Browser, _) => div().flex_1().min_h_0().child(self.browser.clone()).into_any_element(),
-            (Pane::Preview, _) => div().flex_1().min_h_0().child(self.preview.clone()).into_any_element(),
+        let body: AnyElement = match (self.current(cx), tab) {
+            (_, None) | (None, _) => div().flex_1().into_any_element(),
+            (Some(Pane::Changes), _) => div().flex_1().min_h_0().flex().flex_col().child(self.changes.clone()).into_any_element(),
+            (Some(Pane::Files), _) => div().flex_1().min_h_0().flex().flex_col().child(self.files.clone()).into_any_element(),
+            (Some(Pane::Terminal), Some(id)) => self.terminal(id, cx),
+            (Some(Pane::Agents), _) => div().flex_1().min_h_0().flex().flex_col().child(self.agents.clone()).into_any_element(),
+            (Some(Pane::Browser), _) => div().flex_1().min_h_0().flex().flex_col().child(self.browser.clone()).into_any_element(),
+            (Some(Pane::Preview), _) => div().flex_1().min_h_0().flex().flex_col().child(self.preview.clone()).into_any_element(),
         };
-        v_flex().id("side-panel").size_full().relative().bg(t.background)
+        let line = p.line;
+        v_flex().id("side-panel").size_full().relative().bg(p.bg)
             .on_drag_move(cx.listener(Self::resize))
-            .child(self.strip(cx))
             .child(body)
-            .child(div().id("side-resize").absolute().left_0().top_0().bottom_0().w(px(5.)).cursor(CursorStyle::ResizeLeftRight)
-                .hover(|s| s.bg(t.primary.opacity(0.4)))
+            .child(div().id("side-resize").absolute().left_0().top_0().bottom_0().w(u(6.)).cursor(CursorStyle::ResizeLeftRight)
+                .hover(move |s| s.bg(line.opacity(0.6)))
                 .on_drag(ResizeDrag, |_, _, _, cx| cx.new(|_| Ghost)))
     }
 }
+
+// ---------- the bits every pane is made of (panes.css) ----------
+
+// .pbar: the pane's top row, a rule under it
+pub(crate) fn pbar(cx: &App) -> Div {
+    let p = pal(cx);
+    h_flex().flex_none().min_w_0().items_center().gap(u(4.)).pt(u(14.)).px(u(8.)).pb(u(6.)).border_b(u(1.)).border_color(p.rule).text_size(em(cx, 0.9))
+}
+// .pb: a quiet button in it, the accent when on
+pub(crate) fn pb(id: impl Into<ElementId>, on: bool, cx: &App) -> Stateful<Div> {
+    let p = pal(cx);
+    let (text, hover) = (p.text, p.hover);
+    div().id(id).flex_none().flex().items_center().gap(u(5.)).h(u(26.)).px(u(6.)).rounded(u(5.)).whitespace_nowrap().cursor_pointer()
+        .text_color(if on { p.accent } else { p.dim }).when(on, |d| d.bg(p.sel))
+        .when(!on, |d| d.hover(move |s| s.text_color(text).bg(hover)))
+}
+// .ic at the pbar's size
+pub(crate) fn pb_icon(name: IconName, cx: &App) -> Icon { Icon::new(name).size(em(cx, 0.9 * 1.2)) }
+// .pv-path: the dim-ish label that takes the room
+pub(crate) fn path_label(text: impl Into<SharedString>, cx: &App) -> Div {
+    div().flex_1().min_w_0().pl(u(4.)).overflow_hidden().text_ellipsis().whitespace_nowrap().text_color(pal(cx).mid).child(text.into())
+}
+// .btn.sm, plain or .ghost; dimmed and dead when disabled
+pub(crate) fn btn_sm(id: impl Into<ElementId>, ghost: bool, disabled: bool, cx: &App) -> Stateful<Div> {
+    let (p, g) = (pal(cx), geo(cx));
+    let high = p.high;
+    div().id(id).flex_none().flex().items_center().gap(u(6.)).py(u(3.)).px(u(9.)).rounded(u(g.r2)).border(u(1.)).border_color(p.line).text_color(p.text)
+        .text_size(em(cx, 0.9 * 0.88)).whitespace_nowrap().when(!ghost, |d| d.bg(p.raised))
+        .when(disabled, |d| d.opacity(0.45)).when(!disabled, |d| d.cursor_pointer().hover(move |s| s.bg(high)))
+}
+// .btn (full size)
+pub(crate) fn btn(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
+    let (p, g) = (pal(cx), geo(cx));
+    let high = p.high;
+    div().id(id).flex().items_center().gap(u(6.)).py(u(5.)).px(u(12.)).rounded(u(g.r2)).border(u(1.)).border_color(p.line).text_color(p.text).bg(p.raised)
+        .whitespace_nowrap().cursor_pointer().hover(move |s| s.bg(high))
+}
+// .pane-empty: a title and a dim line, centred
+pub(crate) fn empty(title: Option<&str>, sub: impl Into<SharedString>, cx: &App) -> Div {
+    let p = pal(cx);
+    div().flex_1().min_h_0().flex().items_center().justify_center().p(u(30.)).text_color(p.mid)
+        .child(v_flex().gap(u(8.)).items_center().text_center()
+            .when_some(title.map(String::from), |d, t| d.child(div().text_color(p.text).child(t)))
+            .child(div().text_color(p.dim).child(sub.into())))
+}
+// the .url field around an Input: raised, the primary border while it has focus
+pub(crate) fn url_box(focused: bool, raised: bool, cx: &App) -> Div {
+    let p = pal(cx);
+    div().flex_1().min_w_0().h(u(26.)).flex().items_center().rounded(u(5.)).border(u(1.))
+        .border_color(if focused { p.primary } else { gpui_kit::transparent_black() }).when(raised, |d| d.bg(p.raised))
+}
+// .dn / .gutter numbers: the dim colour at 70%
+pub(crate) fn dn_color(cx: &App) -> Hsla { fade(pal(cx).dim, 0.7) }

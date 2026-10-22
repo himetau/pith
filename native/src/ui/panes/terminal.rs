@@ -1,7 +1,7 @@
 // A shell in the session's folder. core::term owns the pty, alacritty_terminal keeps the screen and scrollback,
 // and the visible rows are shaped and painted on a canvas in the mono font, one cell per column
 use crate::core::term;
-use crate::ui::theme::{is_dark, pal};
+use crate::ui::theme::{geo, pal, u};
 use alacritty_terminal::event::{Event as TEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point as GPoint, Side};
@@ -10,9 +10,6 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::{Color as AColor, CursorShape, NamedColor, Processor, Rgb};
 use alacritty_terminal::Term;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, ActiveTheme, Sizable};
-use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -61,6 +58,7 @@ pub struct TermView {
     id: String,
     cwd: String,
     term: Arc<Mutex<Term<Listener>>>,
+    parser: Arc<Mutex<Processor>>,
     geom: Arc<Mutex<Geom>>,
     tx: async_channel::Sender<Ev>,
     focus: FocusHandle,
@@ -96,7 +94,7 @@ impl TermView {
             if alive.is_err() { break; }
         });
         let mut v = TermView {
-            id, cwd, term: Arc::new(Mutex::new(term)), geom: Arc::new(Mutex::new(Geom::default())), tx, focus: cx.focus_handle(),
+            id, cwd, term: Arc::new(Mutex::new(term)), parser: Arc::new(Mutex::new(Processor::new())), geom: Arc::new(Mutex::new(Geom::default())), tx, focus: cx.focus_handle(),
             gen: 0, exited: false, blink: true, scroll_px: 0., selecting: false, _tasks: vec![pump, blink],
         };
         v.start(cx);
@@ -110,21 +108,36 @@ impl TermView {
         let gen = self.gen;
         let (cols, rows) = { let g = self.geom.lock().unwrap(); (if g.cols > 0 { g.cols } else { 80 }, if g.rows > 0 { g.rows } else { 24 }) };
         let (term, tx, tx2) = (self.term.clone(), self.tx.clone(), self.tx.clone());
-        let parser: Mutex<Processor> = Mutex::new(Processor::new());
+        let parser = self.parser.clone();
         let res = term::open(&self.id, &self.cwd, cols as u16, rows as u16, move |text| {
             let mut p = parser.lock().unwrap();
             p.advance(&mut *term.lock().unwrap(), text.as_bytes());
             let _ = tx.try_send(Ev::Wake);
         }, move |_| { let _ = tx2.try_send(Ev::Exit(gen)); });
         self.exited = res.is_err();
+        if let Err(e) = res { self.say(&format!("\x1b[2m[couldn't start a shell: {e}]\x1b[0m\r\n")); }
         cx.notify();
     }
+
+    // text into the screen as if the shell had printed it
+    fn say(&self, s: &str) { self.parser.lock().unwrap().advance(&mut *self.term.lock().unwrap(), s.as_bytes()); }
 
     fn restart(&mut self, cx: &mut Context<Self>) {
         let (cols, rows) = { let g = self.geom.lock().unwrap(); (g.cols.max(2), g.rows.max(2)) };
         *self.term.lock().unwrap() = Term::new(Config::default(), &Grid { cols, rows }, Listener(self.tx.clone()));
+        *self.parser.lock().unwrap() = Processor::new();
         self.start(cx);
     }
+
+    // the pane's "new shell": the old one goes, a fresh one starts in the session's folder
+    pub fn new_shell(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        term::close(&self.id);
+        self.restart(cx);
+        self.focus.focus(window, cx);
+    }
+
+    // what's selected, for "to chat"
+    pub fn selection(&self) -> Option<String> { self.term.lock().unwrap().selection_to_string() }
 
     fn handle(&mut self, ev: Ev, cx: &mut Context<Self>) {
         match ev {
@@ -138,7 +151,10 @@ impl TermView {
                 let rgb = Rgb { r: (r.r * 255.) as u8, g: (r.g * 255.) as u8, b: (r.b * 255.) as u8 };
                 term::write(&self.id, &f(rgb));
             }
-            Ev::Exit(g) => if g == self.gen { self.exited = true; },
+            Ev::Exit(g) => if g == self.gen && !self.exited {
+                self.exited = true;
+                self.say("\r\n\x1b[2m[shell exited, press a key for a new one]\x1b[0m\r\n");
+            },
         }
     }
 
@@ -170,8 +186,9 @@ impl TermView {
     fn key(&mut self, e: &KeyDownEvent, _window: &mut Window, cx: &mut Context<Self>) {
         let ks = &e.keystroke;
         let m = ks.modifiers;
+        // any key brings a dead shell back
         if self.exited {
-            if ks.key == "enter" { self.restart(cx); cx.stop_propagation(); }
+            if !ks.modifiers.modified() || ks.key_char.is_some() { self.restart(cx); cx.stop_propagation(); }
             return;
         }
         let mac = cfg!(target_os = "macos");
@@ -290,20 +307,15 @@ fn to_esc(ks: &Keystroke, app_cursor: bool) -> Option<String> {
     })
 }
 
-// the 16 ansi colours come off pith's palette so the shell matches the rest of the app
+// the colours are matugen's, as the webview's xterm theme had them (panes.ts termTheme)
 struct Palette { fg: Hsla, bg: Hsla, cursor: Hsla, sel: Hsla, ansi: [Hsla; 16] }
 impl Palette {
     fn new(cx: &App) -> Self {
         let p = pal(cx);
-        let t = cx.theme();
-        let dark = is_dark(cx);
-        let h = |deg: f32, s: f32, l: f32| hsla(deg / 360., s, l, 1.);
-        let (blue, magenta, cyan) = if dark { (h(214., 0.8, 0.68), h(300., 0.45, 0.7), h(186., 0.5, 0.6)) } else { (h(214., 0.7, 0.45), h(300., 0.4, 0.45), h(186., 0.65, 0.33)) };
-        let (black, white, bblack, bwhite) = if dark { (h(240., 0.04, 0.3), p.mid, p.dim, t.foreground) } else { (t.foreground, p.dim, p.mid, h(240., 0.04, 0.7)) };
-        let bright = |c: Hsla| hsla(c.h, c.s, (c.l + if dark { 0.08 } else { -0.06 }).clamp(0., 1.), 1.);
         Palette {
-            fg: t.foreground, bg: t.background, cursor: t.primary, sel: t.selection,
-            ansi: [black, p.red, p.green, p.gold, blue, magenta, cyan, white, bblack, bright(p.red), bright(p.green), bright(p.gold), bright(blue), bright(magenta), bright(cyan), bwhite],
+            fg: p.on_surface, bg: p.surface_low, cursor: p.primary, sel: p.primary.opacity(0x59 as f32 / 255.),
+            ansi: [p.surface_highest, p.red, p.green, p.gold, p.blue, p.magenta, p.cyan, p.on_surface_variant,
+                p.outline, p.red, p.green, p.gold, p.blue, p.magenta, p.cyan, p.on_surface],
         }
     }
 
@@ -349,7 +361,7 @@ fn layout(bounds: Bounds<Pixels>, term: &Mutex<Term<Listener>>, geom: &Mutex<Geo
     let ts = window.text_system().clone();
     let fid = ts.resolve_font(base);
     let cell_w = ts.advance(fid, size, 'm').map(|s| s.width).unwrap_or(size * 0.6);
-    let line_h = (size * 1.35).round();
+    let line_h = (size * 1.15).round();
     let cols = ((bounds.size.width / cell_w).floor() as usize).max(2);
     let rows = ((bounds.size.height / line_h).floor() as usize).max(2);
     let mut t = term.lock().unwrap();
@@ -455,12 +467,13 @@ impl Render for TermView {
         let focused = self.focus.is_focused(window);
         let colors = Palette::new(cx);
         let (term, geom, id) = (self.term.clone(), self.geom.clone(), self.id.clone());
-        let base = font(cx.theme().mono_font_family.clone());
-        let size = cx.theme().mono_font_size;
+        let g = geo(cx);
+        let base = font(g.mono.clone());
+        // xterm at the app's font size, line height 1.15
+        let size = u(g.fs).to_pixels(window.rem_size());
         let cursor_on = self.blink;
-        let dim = pal(cx).dim;
-        let restart = cx.listener(|v, _: &ClickEvent, window, cx| { v.restart(cx); v.focus.focus(window, cx); });
-        div().id("term").key_context(CONTEXT).track_focus(&self.focus).size_full().relative().bg(colors.bg).pl_3().pr_1().pt_2().pb_1()
+        // .term-box sits inset in .term-host: 6px 4px 4px 10px
+        div().id("term").key_context(CONTEXT).track_focus(&self.focus).size_full().relative().bg(colors.bg).pt(u(6.)).pr(u(4.)).pb(u(4.)).pl(u(10.))
             .cursor(CursorStyle::IBeam)
             .on_key_down(cx.listener(Self::key))
             .on_scroll_wheel(cx.listener(Self::wheel))
@@ -471,11 +484,5 @@ impl Render for TermView {
                 move |bounds, window, _cx| layout(bounds, &term, &geom, &id, &base, size, &colors, cursor_on, focused, window),
                 move |_bounds, frame, window, cx| { let pal = Palette::new(cx); paint(frame, focused, &pal, window, cx) },
             ).size_full())
-            .when(self.exited, |d| d.child(
-                h_flex().absolute().bottom_0().left_0().right_0().h(px(36.)).px_3().gap_2().items_center().bg(cx.theme().background).border_t_1().border_color(cx.theme().border)
-                    .text_sm().text_color(dim).child("The shell exited")
-                    .child(div().flex_1())
-                    .child(Button::new("term-restart").label("Restart").small().ghost().on_click(restart)),
-            ))
     }
 }

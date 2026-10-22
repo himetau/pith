@@ -1,11 +1,12 @@
-// What changed in the session's folder: git status up top, the picked file's diff below.
+// What changed in the session's folder: git status up top, the picked file's unified diff below (panes.ts Changes).
 // git runs on a worker; a refresh that's overtaken by a newer one is dropped
+use super::code::{self, Cache};
+use super::{btn_sm, dn_color, empty, pb, pb_icon, pbar};
 use crate::core::sys;
-use crate::ui::theme::pal;
-use gpui_kit::component::diff::{Diff, DiffChangeIndicator, DiffFile, DiffHunkSeparator, DiffState};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable};
+use crate::state::tab::{How, Tab};
+use crate::ui::theme::{em, fade, geo, pal, u};
 use gpui_kit::assets::IconName;
+use gpui_kit::component::{h_flex, v_flex, Icon};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::collections::HashMap;
@@ -15,36 +16,55 @@ pub struct GitFile { pub path: String, code: String, add: i64, del: i64 }
 
 enum Status { Loading, NoRepo, Repo { branch: String, files: Vec<GitFile> } }
 
+#[derive(Clone, Copy, PartialEq)]
+enum Row { Hunk, Add, Del, Ctx }
+// one line of the unified view: the old and new numbers, and the code (or the hunk's "line N · context")
+struct DLine { kind: Row, old: Option<usize>, new: Option<usize>, text: String, code: Option<usize> }
+
 pub enum ChangesEvent { OpenFile(String, usize) }
 impl EventEmitter<ChangesEvent> for Changes {}
 
 pub struct Changes {
     cwd: String,
-    tab: Option<EntityId>,
+    tab: Option<Entity<Tab>>,
     status: Status,
     // the file picked in each session, so switching sessions comes back to it
     sel: HashMap<EntityId, String>,
-    diff: Entity<DiffState>,
-    diff_empty: bool,
+    cur: Option<String>,
+    lines: Vec<DLine>,
+    code: String,
+    hl: Cache,
+    hl_lines: std::rc::Rc<Vec<code::Line>>,
+    version: u64,
+    list: ListState,
     gen: u64,
     pub busy: bool,
 }
 
 impl Changes {
-    pub fn new(cx: &mut Context<Self>) -> Self {
-        let diff = cx.new(|cx| DiffState::new([], cx));
-        Changes { cwd: String::new(), tab: None, status: Status::Loading, sel: HashMap::new(), diff, diff_empty: true, gen: 0, busy: false }
+    pub fn new(_cx: &mut Context<Self>) -> Self {
+        Changes { cwd: String::new(), tab: None, status: Status::Loading, sel: HashMap::new(), cur: None, lines: vec![], code: String::new(), hl: Cache::default(), hl_lines: Default::default(), version: 0,
+            list: ListState::new(0, ListAlignment::Top, px(800.)), gen: 0, busy: false }
     }
 
-    pub fn show(&mut self, tab: EntityId, cwd: &str, cx: &mut Context<Self>) {
-        if self.tab != Some(tab) || self.cwd != cwd {
-            self.tab = Some(tab);
-            self.cwd = cwd.to_string();
+    pub fn show(&mut self, tab: &Entity<Tab>, cx: &mut Context<Self>) {
+        let cwd = tab.read(cx).cwd.clone();
+        if self.tab.as_ref() != Some(tab) || self.cwd != cwd {
+            self.tab = Some(tab.clone());
+            self.cwd = cwd;
             self.status = Status::Loading;
-            self.diff_empty = true;
-            self.diff.update(cx, |d, cx| d.set_files([], cx));
+            self.set_diff(None, String::new());
         }
         self.refresh(cx);
+    }
+
+    fn set_diff(&mut self, cur: Option<String>, text: String) {
+        self.cur = cur;
+        self.lines = unified(&text);
+        let code: Vec<&str> = self.lines.iter().filter(|l| l.code.is_some()).map(|l| l.text.as_str()).collect();
+        self.code = code.join("\n");
+        self.version += 1;
+        self.list.reset(self.lines.len());
     }
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -59,113 +79,179 @@ impl Changes {
             let st = cx.background_spawn(async move { sys::git_status(&c2) }).await;
             let Ok(pick) = this.update(cx, |this, cx| {
                 if this.gen != gen { return None; }
-                if st["repo"] != true { this.status = Status::NoRepo; this.busy = false; cx.notify(); return None; }
+                if st["repo"] != true { this.status = Status::NoRepo; this.busy = false; this.set_diff(None, String::new()); cx.notify(); return None; }
                 let files: Vec<GitFile> = st["files"].as_array().into_iter().flatten().map(|f| GitFile {
                     path: f["path"].as_str().unwrap_or("").into(), code: f["code"].as_str().unwrap_or("").into(),
                     add: f["add"].as_i64().unwrap_or(0), del: f["del"].as_i64().unwrap_or(0),
                 }).collect();
-                let tab = this.tab?;
+                let tab = this.tab.as_ref()?.entity_id();
                 let cur = this.sel.get(&tab).filter(|p| files.iter().any(|f| &f.path == *p)).cloned().or_else(|| files.first().map(|f| f.path.clone()));
                 let pick = cur.and_then(|p| files.iter().find(|f| f.path == p).cloned());
                 this.status = Status::Repo { branch: st["branch"].as_str().unwrap_or("").into(), files };
-                if pick.is_none() { this.busy = false; this.diff_empty = true; this.diff.update(cx, |d, cx| d.set_files([], cx)); }
+                if pick.is_none() { this.busy = false; this.set_diff(None, String::new()); }
                 cx.notify();
                 pick
             }) else { return };
             let Some(f) = pick else { return };
+            let path = f.path.clone();
             let text = cx.background_spawn(async move {
                 let mut t = sys::git_diff(&cwd, &f.path, f.code == "??");
-                // a huge diff isn't worth reading in a side panel, and it'd stall parsing
+                // a huge diff isn't worth reading in a side panel
                 if t.len() > 2_000_000 { t.truncate(t.floor_char_boundary(2_000_000)); }
-                DiffFile::parse(&t).unwrap_or_default()
+                t
             }).await;
             let _ = this.update(cx, |this, cx| {
                 if this.gen != gen { return; }
                 this.busy = false;
-                this.diff_empty = text.iter().all(|f| !f.has_changes());
-                this.diff.update(cx, |d, cx| d.set_files(text, cx));
+                this.set_diff(Some(path), text);
                 cx.notify();
             });
         }).detach();
     }
 
     fn pick(&mut self, path: String, cx: &mut Context<Self>) {
-        let Some(tab) = self.tab else { return };
-        self.sel.insert(tab, path);
+        let Some(tab) = &self.tab else { return };
+        self.sel.insert(tab.entity_id(), path);
         self.refresh(cx);
     }
 
     pub fn forget(&mut self, tab: EntityId) { self.sel.remove(&tab); }
 
-    // the summary for the panel's header row
-    pub fn summary(&self) -> Option<(String, usize, i64, i64)> {
+    // act.runCommand: the session runs it, as if typed
+    fn run(&self, text: &str, cx: &mut Context<Self>) {
+        let Some(t) = self.tab.clone() else { return };
+        let app = crate::state::app::Pith::global(cx);
+        app.update(cx, |a, cx| a.focus(t.clone(), cx));
+        t.update(cx, |t, cx| t.send(text.into(), vec![], How::Auto, cx));
+    }
+
+    fn bar(&self, cx: &mut Context<Self>) -> Div {
+        let p = pal(cx);
+        let bar = pbar(cx).gap(u(8.));
         match &self.status {
-            Status::Repo { branch, files } => Some((branch.clone(), files.len(), files.iter().map(|f| f.add).sum(), files.iter().map(|f| f.del).sum())),
-            _ => None,
+            Status::Loading => bar.child(div().h(u(26.))),
+            Status::NoRepo => bar.child(div().h(u(26.)).flex().items_center().text_color(p.dim).child("not a git repository")),
+            Status::Repo { branch, files } => {
+                let (add, del): (i64, i64) = (files.iter().map(|f| f.add).sum(), files.iter().map(|f| f.del).sum());
+                let none = files.is_empty();
+                bar.child(h_flex().min_w_0().gap(u(5.)).text_color(p.mid).child(pb_icon(IconName::GitBranch, cx)).child(div().truncate().child(branch.clone())))
+                    .child(h_flex().flex_none().text_color(p.dim).child(format!("{} files\u{a0}", files.len()))
+                        .child(div().text_color(p.add).child(format!("+{add}"))).child("\u{a0}").child(div().text_color(p.red).child(format!("-{del}"))))
+                    .child(div().flex_1())
+                    .child(pb("ch-refresh", false, cx).child(pb_icon(IconName::RotateCw, cx)).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("refresh").build(w, cx))
+                        .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))))
+                    .child(btn_sm("ch-review", false, none, cx).child(Icon::new(IconName::SquareCheck).size(em(cx, 0.9 * 0.88 * 1.2))).child("review")
+                        .when(!none, |d| d.on_click(cx.listener(|this, _, _, cx| this.run("/review", cx)))))
+                    .child(btn_sm("ch-security", true, none, cx).child("security")
+                        .when(!none, |d| d.on_click(cx.listener(|this, _, _, cx| this.run("/security-review", cx)))))
+            }
+        }
+    }
+
+    fn row(&mut self, ix: usize, cw: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let lines = self.hl_lines.clone();
+        let Some(l) = self.lines.get(ix) else { return div().into_any_element() };
+        let num = |n: Option<usize>| div().w(cw * 5.).flex_none().flex().justify_end().pr(u(8.)).text_color(dn_color(cx)).child(n.map(|n| n.to_string()).unwrap_or_default());
+        let fs = geo(cx).fs * 0.9;
+        let base = h_flex().id(ix).w_full().whitespace_nowrap().overflow_hidden().text_size(u(fs)).line_height(u(fs * 1.5)).font_family(geo(cx).mono.clone());
+        match l.kind {
+            Row::Hunk => base.mt(u(6.)).bg(fade(p.blue, 0.08)).text_color(p.blue)
+                .child(div().w(cw * 5.).flex_none().flex().justify_end().pr(u(8.)).text_color(dn_color(cx)).child("⋯")).child(num(None))
+                .child(div().child(l.text.clone())).into_any_element(),
+            kind => {
+                let text: AnyElement = match l.code.and_then(|i| lines.get(i)) { Some(hl) => code::styled(hl).into_any_element(), None => div().child(l.text.clone()).into_any_element() };
+                let target = l.new.filter(|_| kind != Row::Del);
+                let path = self.cur.clone().unwrap_or_default();
+                base.when(kind == Row::Add, |d| d.bg(p.add_bg)).when(kind == Row::Del, |d| d.bg(p.del_bg))
+                    .child(num(l.old)).child(num(l.new)).child(div().min_w_0().child(text))
+                    // double click a line to see it in the whole file
+                    .when_some(target, |d, n| d.on_click(cx.listener(move |_, e: &ClickEvent, _, cx| if e.click_count() >= 2 { cx.emit(ChangesEvent::OpenFile(path.clone(), n)); })))
+                    .into_any_element()
+            }
         }
     }
 }
 
-fn code_label(code: &str) -> (&'static str, char) {
+// git's patch as the reference's unified view: headers dropped, hunks as "line N · context", both line numbers
+fn unified(text: &str) -> Vec<DLine> {
+    let (mut o, mut n, mut code) = (0usize, 0usize, 0usize);
+    let mut out = vec![];
+    for l in text.split('\n') {
+        if ["diff --git", "index ", "--- ", "+++ ", "new file", "deleted file", "similarity", "rename "].iter().any(|h| l.starts_with(h)) { continue; }
+        if let Some(rest) = l.strip_prefix("@@ -") {
+            let Some((nums, ctx)) = rest.split_once(" @@") else { continue };
+            let mut it = nums.split(" +");
+            o = it.next().and_then(|a| a.split(',').next()?.parse().ok()).unwrap_or(0);
+            n = it.next().and_then(|a| a.split(',').next()?.parse().ok()).unwrap_or(0);
+            let ctx = ctx.trim();
+            out.push(DLine { kind: Row::Hunk, old: None, new: None, text: if ctx.is_empty() { format!("line {n}") } else { format!("line {n}  ·  {ctx}") }, code: None });
+            continue;
+        }
+        if l.starts_with('\\') || l.is_empty() { continue; }
+        let (sign, rest) = l.split_at(l.ceil_char_boundary(1));
+        let (kind, old, new) = match sign {
+            "+" => { n += 1; (Row::Add, None, Some(n - 1)) }
+            "-" => { o += 1; (Row::Del, Some(o - 1), None) }
+            " " => { o += 1; n += 1; (Row::Ctx, Some(o - 1), Some(n - 1)) }
+            _ => continue,
+        };
+        out.push(DLine { kind, old, new, text: rest.replace('\t', "    "), code: Some(code) });
+        code += 1;
+    }
+    out
+}
+
+fn code_of(code: &str) -> (String, char) {
     let c = code.trim();
-    if c == "??" { return ("new", 'A'); }
-    let k = c.chars().next().unwrap_or('M');
-    (match k { 'A' => "A", 'D' => "D", 'R' => "R", 'C' => "C", 'U' => "U", _ => "M" }, k)
+    if c == "??" { return ("new".into(), 'N'); }
+    (c.to_string(), c.chars().next().unwrap_or('M'))
 }
 
 impl Render for Changes {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = pal(cx);
-        let t = cx.theme();
-        let empty = |title: &str, sub: String| v_flex().flex_1().items_center().justify_center().gap_1().p_6().text_sm()
-            .child(div().text_color(t.foreground).child(title.to_string())).child(div().text_color(p.dim).text_center().child(sub)).into_any_element();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (p, g) = (pal(cx), geo(cx));
+        let bar = self.bar(cx);
+        self.hl_lines = self.hl.lines(self.version, &self.code, self.cur.as_deref().and_then(code::lang_of), cx);
         let body: AnyElement = match &self.status {
-            Status::Loading => v_flex().flex_1().items_center().justify_center().child(Spinner::new().small().color(p.dim)).into_any_element(),
-            Status::NoRepo => empty("Not a git repository", crate::ui::tools::tilde(&self.cwd)),
-            Status::Repo { files, .. } if files.is_empty() => empty("No changes", "The working tree is clean".into()),
+            Status::Loading => div().flex_1().into_any_element(),
+            Status::NoRepo => empty(Some("no git here"), crate::ui::tools::tilde(&self.cwd), cx).into_any_element(),
             Status::Repo { files, .. } => {
-                let cur = self.tab.and_then(|t| self.sel.get(&t).cloned()).filter(|c| files.iter().any(|f| &f.path == c)).or_else(|| files.first().map(|f| f.path.clone()));
-                let rows = files.iter().map(|f| {
-                    let on = cur.as_deref() == Some(f.path.as_str());
-                    let (label, k) = code_label(&f.code);
-                    let color = match k { 'A' => p.green, 'D' => p.red, _ => p.gold };
+                let fs = g.fs * 0.9;
+                let rows: Vec<AnyElement> = files.iter().map(|f| {
+                    let on = self.cur.as_deref() == Some(f.path.as_str());
+                    let (label, k) = code_of(&f.code);
+                    let color = match k { 'N' | 'A' => p.green, 'D' => p.red, _ => p.gold };
                     let (dir, base) = match f.path.rfind('/') { Some(i) => (f.path[..=i].to_string(), f.path[i + 1..].to_string()), None => (String::new(), f.path.clone()) };
                     let path = f.path.clone();
-                    h_flex().id(SharedString::from(format!("ch-{}", f.path))).h(px(26.)).px_2().gap_2().items_center().rounded(t.radius).text_sm()
-                        .when(on, |d| d.bg(t.list_active)).hover(|s| s.bg(if on { t.list_active } else { t.list_hover }))
-                        .child(div().w(px(26.)).flex_none().text_xs().font_weight(FontWeight::MEDIUM).text_color(color).child(label))
-                        .child(h_flex().flex_1().min_w_0().overflow_hidden()
-                            .child(div().flex_none().text_color(t.foreground).child(base))
-                            .child(div().min_w_0().ml_2().truncate().text_xs().text_color(p.dim).child(dir.trim_end_matches('/').to_string())))
-                        .child(h_flex().flex_none().gap_1p5().text_xs().font_family(t.mono_font_family.clone())
-                            .when(f.add > 0, |d| d.child(div().text_color(p.green).child(format!("+{}", f.add))))
-                            .when(f.del > 0, |d| d.child(div().text_color(p.red).child(format!("−{}", f.del)))))
+                    let hover = p.hover;
+                    h_flex().id(SharedString::from(format!("ch-{}", f.path))).gap(u(8.)).items_baseline().py(u(2.)).px(u(8.)).rounded(u(4.)).cursor_pointer().text_size(u(fs))
+                        .when(on, |d| d.bg(p.high)).when(!on, |d| d.hover(move |s| s.bg(hover)))
+                        .child(div().w(u(fs * 0.6 * 4.)).flex_none().text_size(u(fs * 0.8)).text_color(color).child(label))
+                        .child(h_flex().flex_1().min_w_0().overflow_hidden().whitespace_nowrap().child(div().text_color(p.dim).child(dir)).child(div().child(base)))
+                        .child(h_flex().flex_none().text_size(u(fs * 0.85)).child(div().text_color(p.add).child(format!("+{}", f.add))).child("\u{a0}").child(div().text_color(p.red).child(format!("-{}", f.del))))
                         .on_click(cx.listener(move |this, _, _, cx| this.pick(path.clone(), cx)))
-                });
-                let rows: Vec<_> = rows.collect();
-                let n = rows.len();
-                let open = cx.entity().downgrade();
+                        .into_any_element()
+                }).collect();
+                let none = rows.is_empty();
+                // the code column's character width, for the 5ch gutters
+                let mono = font(g.mono.clone());
+                let ts = window.text_system().clone();
+                let dfs = u(fs).to_pixels(window.rem_size());
+                let cw = ts.advance(ts.resolve_font(&mono), dfs, '0').map(|s| s.width).unwrap_or(dfs * 0.6);
+                let diff: AnyElement = if self.cur.is_none() { div().flex_1().into_any_element() }
+                    else if self.lines.is_empty() && !self.busy { div().flex_1().child(div().p(u(14.)).text_color(p.dim).child("binary file, or no textual change")).into_any_element() }
+                    else {
+                        list(self.list.clone(), cx.processor(move |this, ix, _, cx| this.row(ix, cw, cx)))
+                            .flex_1().min_h_0().pt(u(6.)).pb(u(20.)).text_size(u(fs)).line_height(relative(1.5)).font_family(g.mono.clone()).into_any_element()
+                    };
                 v_flex().flex_1().min_h_0()
-                    .child(div().id("ch-files").flex_none().max_h(px((n.min(9) as f32) * 26. + 8.)).overflow_y_scroll().p_1().children(rows))
-                    .child(div().h_px().flex_none().bg(t.border))
-                    .child(if self.diff_empty && !self.busy {
-                        empty("No text changes", "A binary file, or only its mode changed".into())
-                    } else {
-                        div().flex_1().min_h_0().child(
-                            Diff::new(&self.diff).header_visible(false).hunk_separator(DiffHunkSeparator::LineInfo).change_indicator(DiffChangeIndicator::Bars).size_full()
-                                // double click a line to see it in the whole file
-                                .on_line_click(move |pos, ev, _, cx| {
-                                    if ev.click_count() < 2 { return; }
-                                    let (path, line) = (pos.path().to_string(), pos.line());
-                                    let _ = open.update(cx, |_, cx| cx.emit(ChangesEvent::OpenFile(path, line)));
-                                }),
-                        ).into_any_element()
-                    })
+                    .child(div().id("ch-files").flex_none().max_h(relative(0.34)).overflow_y_scroll().p(u(4.)).border_b(u(1.)).border_color(p.rule)
+                        .when(none, |d| d.child(div().p(u(14.)).text_color(p.dim).child("working tree is clean"))).children(rows))
+                    .child(diff)
                     .into_any_element()
             }
         };
-        v_flex().size_full().child(body)
+        v_flex().size_full().child(bar).child(body)
     }
 }
-
-pub fn branch_icon() -> Icon { Icon::new(IconName::GitBranch).xsmall() }

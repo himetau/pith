@@ -80,6 +80,20 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         window.dispatch_event(PlatformInput::ScrollWheel(ScrollWheelEvent { position: pos, delta: ScrollDelta::Pixels(point(px(0.), -dy)), modifiers: Modifiers::default(), touch_phase: TouchPhase::Moved }), cx);
     } else if let Some(f) = cmd["open"].as_str() {
         app.update(cx, |a, cx| a.open(f, cx));
+    } else if let Some(cwd) = cmd["fresh"].as_str() {
+        app.update(cx, |a, cx| { a.fresh(cwd.to_string(), crate::state::tab::Kind::Chat, cx); });
+    } else if cmd.get("pane").is_some() {
+        // {"pane": "web|preview|changes|files|agents|term"} opens the active session's side window there, null closes it
+        let p = crate::ui::panes::PANES.iter().find(|(_, l, _)| Some(*l) == cmd["pane"].as_str()).map(|(p, _, _)| *p);
+        let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
+        app.update(cx, |a, cx| a.set_pane(&t, p, cx));
+    } else if let Some(f) = cmd["reveal"].as_str() {
+        crate::ui::panes::reveal(f, cmd["line"].as_u64().map(|l| l as usize), cx);
+    } else if let Some(f) = cmd["agent"]["file"].as_str() {
+        // {"agent": {"file", "agent", "task", "running"}}: a subagent run as a watched tab
+        let s = |k: &str| cmd["agent"][k].as_str().unwrap_or("").to_string();
+        let run = crate::state::hub::AgentRun { file: f.into(), cwd: s("cwd"), agent: s("agent"), task: s("task"), running: cmd["agent"]["running"] == true };
+        app.update(cx, |a, cx| { a.open_agent(run, cx); });
     } else if let Some(v) = cmd["view"].as_str() {
         let v = match v { "settings" => View::Settings, "usage" => View::Usage, "agents" => View::Agents, "images" => View::Images, "chat" => View::Chat, _ => View::Home };
         app.update(cx, |a, cx| a.show(v, cx));
