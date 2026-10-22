@@ -258,7 +258,7 @@ impl Render for SettingsPage {
         let keys = group("keys", vec![
             div().grid().grid_cols(2).gap_y(u(4.)).gap_x(u(20.)).pt(u(4.)).pb(u(8.))
                 .children(KEYS.iter().map(|(k, v)| div().flex().gap(u(10.)).items_center().text_size(em(cx, 0.9))
-                    .child(kbd(*k, cx).min_w(u(11. * ch)).flex().justify_center()).child(div().child(*v))))
+                    .child(kbd(*k, cx).text_size(em(cx, 0.9 * 0.78)).min_w(u(11. * ch)).flex().justify_center()).child(div().child(*v))))
                 .into_any_element(),
         ], cx);
 
