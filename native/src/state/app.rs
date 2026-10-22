@@ -140,9 +140,21 @@ impl Pith {
             Msg::Rec(_, rec) => {
                 let background = self.active.as_ref() != Some(&tab) || self.view != View::Chat;
                 tab.update(cx, |t, cx| {
+                    let asks = t.asks.len();
                     t.on_event(&rec, cx);
                     if background && rec["type"] == "agent_settled" { t.unread = true; }
-                    if rec["type"] == "agent_settled" && rec["aborted"] != true { crate::platform::notify(&t.title(), "Done", cx); }
+                    // chat.ts: the reply's start, or "finished", and how many questions wait. aborted runs too
+                    if rec["type"] == "agent_settled" {
+                        let text = t.items.iter().rev().find_map(|i| if let super::tab::ItemKind::Assistant(a) = &i.kind {
+                            Some(a.blocks.iter().filter_map(|b| if let Some(super::tab::Block::Text(x)) = b { Some(x.as_str()) } else { None }).collect::<Vec<_>>().join(" "))
+                        } else { None }).unwrap_or_default();
+                        let mut body: String = text.chars().take(180).collect();
+                        if body.is_empty() { body = "finished".into(); }
+                        let n = t.asks.len();
+                        if n > 0 { body += &format!(" · {n} question{} waiting", if n == 1 { "" } else { "s" }); }
+                        crate::platform::notify(&t.title(), &body, cx);
+                    }
+                    if t.asks.len() > asks { crate::platform::notify(&t.title(), "needs your answer", cx); }
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),

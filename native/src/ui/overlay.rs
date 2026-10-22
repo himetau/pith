@@ -211,13 +211,14 @@ pub fn prompt(title: &str, value: &str, ok: impl Fn(String, &mut Window, &mut Ap
     let (title, value) = (SharedString::from(title.to_string()), value.to_string());
     let view = cx.new(|cx| {
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
-        // the whole value selected, so typing replaces it
-        input.update(cx, |i, cx| i.select_all(window, cx));
         let sub = cx.subscribe_in(&input, window, |this: &mut Prompt, _, ev: &InputEvent, window, cx| if let InputEvent::PressEnter { .. } = ev { this.done(window, cx) });
         Prompt { title, input, ok: Rc::new(ok), _sub: sub }
     });
-    let f = view.read(cx).input.read(cx).focus_handle(cx);
+    let input = view.read(cx).input.clone();
+    let f = input.read(cx).focus_handle(cx);
     show(view.into(), Some(f), Place::Center, window, cx);
+    // the whole value selected once it's focused, so typing replaces it
+    window.defer(cx, move |window, cx| input.update(cx, |i, cx| i.select_all(window, cx)));
 }
 
 impl Render for Prompt {
