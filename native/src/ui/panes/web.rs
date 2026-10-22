@@ -22,6 +22,8 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind { Browser, Preview }
 
+actions!(pith_panes, [ExitPick]);
+
 // the preview's widths: fill the pane, or a tablet or phone framed on stripes
 const VIEWPORTS: [(&str, IconName, f32); 3] = [("fill", IconName::Monitor, 0.), ("tablet", IconName::Tablet, 820.), ("phone", IconName::Smartphone, 390.)];
 
@@ -356,7 +358,8 @@ impl Render for WebPane {
                 .into_any_element()
         };
         v_flex().id("web-pane").size_full().track_focus(&self.focus)
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| if e.keystroke.key == "escape" && this.pick { this.set_pick(false, window, cx); cx.stop_propagation(); }))
+            // esc leaves comment mode; the context only exists while it's on, so esc otherwise still stops the run
+            .when(self.pick, |d| d.key_context("PithPick")).on_action(cx.listener(|this, _: &ExitPick, window, cx| this.set_pick(false, window, cx)))
             .child(bar).child(body).into_any_element()
     }
 }

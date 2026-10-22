@@ -94,6 +94,10 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         let s = |k: &str| cmd["agent"][k].as_str().unwrap_or("").to_string();
         let run = crate::state::hub::AgentRun { file: f.into(), cwd: s("cwd"), agent: s("agent"), task: s("task"), running: cmd["agent"]["running"] == true };
         app.update(cx, |a, cx| { a.open_agent(run, cx); });
+    } else if let Some(id) = cmd["webeval"]["id"].as_str() {
+        // {"webeval": {"id": "pv-<tab>", "js": "return innerWidth"}}: js in an offscreen page, blocking
+        let r = futures::executor::block_on(crate::core::web::eval(id, cmd["webeval"]["js"].as_str().unwrap_or("return null")));
+        return json!({ "ok": r.is_ok(), "value": r.clone().unwrap_or_default(), "error": r.err() });
     } else if let Some(v) = cmd["view"].as_str() {
         let v = match v { "settings" => View::Settings, "usage" => View::Usage, "agents" => View::Agents, "images" => View::Images, "chat" => View::Chat, _ => View::Home };
         app.update(cx, |a, cx| a.show(v, cx));

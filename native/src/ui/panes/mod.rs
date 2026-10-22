@@ -25,7 +25,10 @@ use std::sync::Mutex;
 use terminal::TermView;
 use web::WebPane;
 
-pub fn bind_keys(cx: &mut App) { terminal::bind_keys(cx); }
+pub fn bind_keys(cx: &mut App) {
+    terminal::bind_keys(cx);
+    cx.bind_keys([KeyBinding::new("escape", web::ExitPick, Some("PithPick"))]);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pane { Browser, Preview, Changes, Files, Agents, Terminal }
