@@ -17,6 +17,7 @@ async-channel = "2"
 tiny_http = "0.12"
 notify = "8"
 portable-pty = "0.9"
+alacritty_terminal = "0.26"
 ureq = { version = "3", features = ["json"] }
 base64 = "0.22"
 trash = "5"
