@@ -140,9 +140,12 @@ impl Pith {
             Msg::Rec(_, rec) => {
                 let background = self.active.as_ref() != Some(&tab) || self.view != View::Chat;
                 tab.update(cx, |t, cx| {
+                    let asks = t.asks.len();
                     t.on_event(&rec, cx);
                     if background && rec["type"] == "agent_settled" { t.unread = true; }
-                    if rec["type"] == "agent_settled" && rec["aborted"] != true { crate::platform::notify(&t.title(), "Done", cx); }
+                    // chat.ts: the start of the last reply, and any questions still waiting. aborted runs too
+                    if rec["type"] == "agent_settled" { crate::platform::notify(&t.title(), &settled_body(t), cx); }
+                    if t.asks.len() > asks { crate::platform::notify(&t.title(), "needs your answer", cx); }
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
@@ -211,8 +214,11 @@ impl Pith {
         self.focus(tab, cx);
     }
 
-    pub fn fresh(&mut self, cwd: String, kind: Kind, cx: &mut Context<Self>) -> Entity<Tab> {
-        let tab = self.add(Tab::new(cwd, None, kind, self.mode_default(), None, self.spawner.clone()), cx);
+    pub fn fresh(&mut self, cwd: String, kind: Kind, cx: &mut Context<Self>) -> Entity<Tab> { let m = self.mode_default(); self.fresh_in(cwd, kind, m, cx) }
+
+    // a new session in a mode of its own (home's pending mode)
+    pub fn fresh_in(&mut self, cwd: String, kind: Kind, mode: Mode, cx: &mut Context<Self>) -> Entity<Tab> {
+        let tab = self.add(Tab::new(cwd, None, kind, mode, None, self.spawner.clone()), cx);
         self.focus(tab.clone(), cx);
         tab
     }
@@ -303,4 +309,16 @@ fn split_args(s: &str) -> Vec<String> {
     }
     if !cur.is_empty() { out.push(cur); }
     out
+}
+
+// the notification when a run settles: the start of the last reply (or "finished"), and how many questions wait
+fn settled_body(t: &Tab) -> String {
+    use super::tab::{Block, ItemKind};
+    let text = t.items.iter().rev().find_map(|i| if let ItemKind::Assistant(a) = &i.kind { Some(a) } else { None })
+        .map(|a| a.blocks.iter().flatten().filter_map(|b| if let Block::Text(s) = b { Some(s.as_str()) } else { None }).collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+    let head: String = text.chars().take(180).collect();
+    let n = t.asks.len();
+    let asks = if n > 0 { format!(" · {n} question{} waiting", if n == 1 { "" } else { "s" }) } else { String::new() };
+    format!("{}{asks}", if head.is_empty() { "finished".to_string() } else { head })
 }

@@ -162,6 +162,8 @@ pub struct Tab {
     pub queue: (Vec<String>, Vec<String>),
     pub asks: Vec<Ask>,
     pub widgets: Vec<(String, Vec<String>)>,
+    // widgets an extension put under the composer rather than over it (widgetPlacement "belowEditor")
+    pub widgets_below: std::collections::HashSet<String>,
     pub statuses: Vec<(String, String)>,
     pub commands: Vec<Command>,
     pub todos: Vec<Todo>,
@@ -188,7 +190,7 @@ impl Tab {
         Tab {
             id: format!("t{}{}", std::process::id(), n), cwd, file, kind, mode, name, status: Status::Cold,
             items: vec![], tools: HashMap::new(), state: json!({}), levels: vec![], stats: Value::Null,
-            queue: (vec![], vec![]), asks: vec![], widgets: vec![], statuses: vec![], commands: vec![], todos: vec![],
+            queue: (vec![], vec![]), asks: vec![], widgets: vec![], widgets_below: Default::default(), statuses: vec![], commands: vec![], todos: vec![],
             unread: false, error: String::new(), compacting: false, retry: None, run_start: None, last_used: Instant::now(),
             preview: None, version: 0, proc: None, spawner, starting: None, typed: vec![], live: None, loaded: false,
         }
@@ -610,6 +612,7 @@ impl Tab {
             "setWidget" => {
                 let key = s(&r["widgetKey"]);
                 self.widgets.retain(|(k, _)| *k != key);
+                if r["widgetPlacement"] == "belowEditor" { self.widgets_below.insert(key.clone()); } else { self.widgets_below.remove(&key); }
                 if let Some(lines) = r["widgetLines"].as_array() { self.widgets.push((key, lines.iter().map(|l| strip_ansi(l.as_str().unwrap_or(""))).collect())); }
                 cx.notify();
             }
