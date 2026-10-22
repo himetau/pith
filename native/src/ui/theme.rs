@@ -3,7 +3,6 @@
 use crate::core::sys;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::*;
-use gpui_kit::prelude::FluentBuilder as _;
 
 fn hex(s: &str) -> Option<Hsla> {
     let s = s.trim().trim_start_matches('#');
@@ -87,6 +86,23 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
         c.link = a;
         c.link_hover = c.primary_hover;
         c.link_active = c.primary_active;
+        // buttons and the controls that take the accent: the kit's defaults are its own greys
+        c.button_primary = a;
+        c.button_primary_hover = c.primary_hover;
+        c.button_primary_active = c.primary_active;
+        c.button_primary_foreground = c.primary_foreground;
+        c.button = raised;
+        c.button_hover = hover;
+        c.button_active = active;
+        c.button_foreground = fg;
+        c.switch = a;
+        c.slider_bar = a;
+        c.slider_thumb = g(1.);
+        c.progress_bar = a;
+        c.chart_1 = a;
+        c.tab_active = bg;
+        c.tab_active_foreground = fg;
+        c.tab_foreground = mid;
         c.description_list_label = hover;
         c.description_list_label_foreground = mid;
         t.font_size = px(size);
