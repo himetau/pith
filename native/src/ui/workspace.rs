@@ -238,7 +238,8 @@ impl Workspace {
             View::Images => "Images".into(),
             View::Chat => app.active.as_ref().map(|t| t.read(cx).title()).unwrap_or_default(),
         };
-        let cwd = if app.view == View::Chat { app.active.as_ref().map(|t| super::tools::tilde(&t.read(cx).cwd)) } else { None };
+        // just the folder's name: the sidebar already groups by project, and a full path crowds the title out
+        let cwd = if app.view == View::Chat { app.active.as_ref().map(|t| { let c = t.read(cx).cwd.clone(); std::path::Path::new(&c).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(c) }) } else { None };
         let sidebar = app.sidebar;
         let mac = cfg!(target_os = "macos");
         let a = self.app.clone();

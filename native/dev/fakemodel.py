@@ -61,7 +61,12 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "text/event-stream"); self.send_header("cache-control", "no-cache"); self.end_headers()
         slow = 0.12 if "long" in text else 0.05
-        if "browse" in text and not after_tool:
+        if "preview" in text and not after_tool:
+            # "preview <path>" shows a file in the preview pane
+            path = next((w for w in text.split() if w.startswith("/")), "index.html")
+            self.send({"tool_calls": [{"index": 0, "id": "call_p", "type": "function", "function": {"name": "preview", "arguments": json.dumps({"path": path})}}]})
+            self.send({}, "tool_calls")
+        elif "browse" in text and not after_tool:
             # "browse <url>" drives the browser tool
             url = next((w for w in text.split() if "://" in w or w.startswith("/")), "about:blank")
             self.send({"tool_calls": [{"index": 0, "id": "call_b", "type": "function", "function": {"name": "browser", "arguments": json.dumps({"action": "navigate", "url": url})}}]})

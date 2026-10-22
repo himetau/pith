@@ -5,6 +5,7 @@ mod agents;
 mod changes;
 mod files;
 mod terminal;
+mod web;
 
 use super::theme::pal;
 use super::workspace::TOP;
@@ -22,12 +23,14 @@ use gpui_kit::*;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use terminal::TermView;
+use web::WebPane;
 
 pub fn bind_keys(cx: &mut App) { terminal::bind_keys(cx); }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Pane { Changes, Files, Terminal, Agents }
-const PANES: [(Pane, &str); 4] = [(Pane::Changes, "Changes"), (Pane::Files, "Files"), (Pane::Terminal, "Terminal"), (Pane::Agents, "Agents")];
+pub enum Pane { Changes, Files, Terminal, Agents, Browser, Preview }
+// browser and preview only get a tab once the session has used them
+const PANES: [(Pane, &str); 6] = [(Pane::Changes, "Changes"), (Pane::Files, "Files"), (Pane::Terminal, "Terminal"), (Pane::Agents, "Agents"), (Pane::Browser, "Browser"), (Pane::Preview, "Preview")];
 
 pub const MIN_W: f32 = 320.;
 pub const MAX_W: f32 = 900.;
@@ -37,6 +40,15 @@ static REVEAL: Mutex<Option<(String, Option<usize>)>> = Mutex::new(None);
 #[allow(dead_code)]
 pub fn reveal(path: &str, line: Option<usize>, cx: &mut App) {
     *REVEAL.lock().unwrap() = Some((path.to_string(), line));
+    Pith::global(cx).update(cx, |a, cx| { a.side = true; cx.notify(); });
+}
+
+// a pane asked for from outside the panel (/diff, /terminal): opens the panel on it
+static OPEN: Mutex<Option<Pane>> = Mutex::new(None);
+// for callers already inside an update of the app state: they set app.side themselves
+pub fn request(pane: Pane) { *OPEN.lock().unwrap() = Some(pane); }
+pub fn open(pane: Pane, cx: &mut App) {
+    request(pane);
     Pith::global(cx).update(cx, |a, cx| { a.side = true; cx.notify(); });
 }
 
@@ -55,6 +67,8 @@ pub struct SidePanel {
     files: Entity<Files>,
     agents: Entity<Agents>,
     terms: HashMap<EntityId, Entity<TermView>>,
+    browser: Entity<WebPane>,
+    preview: Entity<WebPane>,
     // the session changed something while Changes wasn't on screen
     stale: bool,
     save_w: Option<Task<()>>,
@@ -68,6 +82,8 @@ impl SidePanel {
         let changes = cx.new(Changes::new);
         let files = cx.new(|cx| Files::new(window, cx));
         let agents = cx.new(Agents::new);
+        let browser = cx.new(|cx| WebPane::new(web::Kind::Browser, cx));
+        let preview = cx.new(|cx| WebPane::new(web::Kind::Preview, cx));
         let subs = vec![
             cx.observe_in(&app, window, |this, _, window, cx| this.sync(window, cx)),
             cx.observe(&agents, |_, _, cx| cx.notify()),
@@ -77,7 +93,7 @@ impl SidePanel {
             }),
         ];
         let mut this = SidePanel {
-            app, tab: None, open: false, pane: HashMap::new(), changes, files, agents, terms: HashMap::new(),
+            app, tab: None, open: false, pane: HashMap::new(), changes, files, agents, terms: HashMap::new(), browser, preview,
             stale: true, save_w: None, tab_sub: None, _subs: subs,
         };
         this.sync(window, cx);
@@ -114,6 +130,8 @@ impl SidePanel {
         }
         let shown = open && !self.open;
         self.open = open;
+        let asked = OPEN.lock().unwrap().take();
+        if let (Some(pane), Some(tab)) = (asked, self.tab.clone()) { self.pane.insert(tab.entity_id(), pane); self.show_pane(false, window, cx); return; }
         if let Some((path, line)) = REVEAL.lock().unwrap().take() {
             if self.tab.is_some() { self.open_file(path, line, window, cx); return; }
         }
@@ -141,7 +159,13 @@ impl SidePanel {
                 if focus { let h = t.read(cx).focus_handle(); h.focus(window, cx); }
             }
             Pane::Agents => {}
+            Pane::Browser => self.browser.update(cx, |w, cx| w.show(&tab.read(cx).id.clone(), cx)),
+            Pane::Preview => self.preview.update(cx, |w, cx| w.show(&tab.read(cx).id.clone(), cx)),
         }
+        let pane = self.pane();
+        // snapshots stop while a page isn't on screen
+        if pane != Pane::Browser || !self.open { self.browser.update(cx, |w, _| w.hide()); }
+        if pane != Pane::Preview || !self.open { self.preview.update(cx, |w, _| w.hide()); }
         cx.notify();
     }
 
@@ -184,7 +208,7 @@ impl SidePanel {
         let busy = self.changes.read(cx).busy;
         h_flex().h(px(TOP)).flex_none().pl_2().pr_2().gap_0p5().items_center().window_control_area(WindowControlArea::Drag)
             .on_mouse_down(MouseButton::Left, |_, window, _| if !cfg!(target_os = "macos") { window.start_window_move() })
-            .children(PANES.iter().map(|(pane, label)| {
+            .children(PANES.iter().filter(|(pane, _)| self.has(*pane, cx)).map(|(pane, label)| {
                 let (pane, on) = (*pane, *pane == cur);
                 h_flex().id(*label).h(px(26.)).px_2p5().gap_1p5().items_center().rounded(t.radius).text_sm()
                     .text_color(if on { t.foreground } else { p.dim })
@@ -202,6 +226,16 @@ impl SidePanel {
                 if busy { div().size(px(24.)).flex().items_center().justify_center().child(Spinner::new().xsmall().color(p.dim)).into_any_element() }
                 else { Button::new("ch-refresh").icon(IconName::RefreshCw).ghost().xsmall().tooltip("Refresh")
                     .on_click(cx.listener(|this, _, _, cx| this.changes.update(cx, |c, cx| c.refresh(cx)))).into_any_element() })))
+    }
+
+    fn has(&self, pane: Pane, cx: &App) -> bool {
+        let Some(tab) = &self.tab else { return !matches!(pane, Pane::Browser | Pane::Preview) };
+        let t = tab.read(cx);
+        match pane {
+            Pane::Browser => crate::core::web::page(&crate::core::browser::page_id(&t.id)).is_some(),
+            Pane::Preview => t.preview.is_some(),
+            _ => true,
+        }
     }
 
     fn changes_bar(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
@@ -237,6 +271,8 @@ impl Render for SidePanel {
                 None => div().flex_1().into_any_element(),
             },
             (Pane::Agents, _) => div().flex_1().min_h_0().border_t_1().border_color(t.border).child(self.agents.clone()).into_any_element(),
+            (Pane::Browser, _) => div().flex_1().min_h_0().child(self.browser.clone()).into_any_element(),
+            (Pane::Preview, _) => div().flex_1().min_h_0().child(self.preview.clone()).into_any_element(),
         };
         v_flex().id("side-panel").size_full().relative().bg(t.background)
             .on_drag_move(cx.listener(Self::resize))

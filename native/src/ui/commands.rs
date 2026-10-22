@@ -137,7 +137,9 @@ pub fn run_builtin(tab: Option<Entity<Tab>>, text: &str, window: &mut Window, cx
         },
         "image" => tab.update(cx, |t, cx| t.send(format!("Generate this image with generate_image, then show it: {arg}"), vec![], crate::state::tab::How::Auto, cx)),
         // the side panel decides which of its views to show
-        "diff" | "files" | "terminal" => app.update(cx, |a, cx| { a.side = true; cx.notify(); }),
+        "diff" => super::panes::open(super::panes::Pane::Changes, cx),
+        "files" => super::panes::open(super::panes::Pane::Files, cx),
+        "terminal" => super::panes::open(super::panes::Pane::Terminal, cx),
         "stop" => tab.update(cx, |t, cx| t.abort(cx)),
         _ => return false,
     }

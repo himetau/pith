@@ -135,6 +135,7 @@ impl Pith {
     fn route(&mut self, msg: Msg, cx: &mut Context<Self>) {
         let id = match &msg { Msg::Rec(t, _) | Msg::Exit(t, _, _) | Msg::Preview(t, _) | Msg::Browser(t) => t.clone() };
         let Some(tab) = self.tabs.iter().find(|t| t.read(cx).id == id).cloned() else { return };
+        let opens = matches!(msg, Msg::Preview(..) | Msg::Browser(_)) && self.active.as_ref() == Some(&tab);
         match msg {
             Msg::Rec(_, rec) => {
                 let background = self.active.as_ref() != Some(&tab) || self.view != View::Chat;
@@ -145,13 +146,19 @@ impl Pith {
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
+            // the agent opened a page: the panel shows it, the way the agent sees it
             Msg::Preview(_, args) => tab.update(cx, |t, cx| {
+                crate::ui::panes::request(crate::ui::panes::Pane::Preview);
                 crate::core::preview::show(&t.id, args["path"].as_str(), args["url"].as_str());
                 t.preview = Some(args);
                 cx.emit(TabEvent::Preview);
             }),
-            Msg::Browser(_) => tab.update(cx, |_, cx| cx.emit(TabEvent::Browser)),
+            Msg::Browser(_) => {
+                crate::ui::panes::request(crate::ui::panes::Pane::Browser);
+                tab.update(cx, |_, cx| cx.emit(TabEvent::Browser));
+            }
         }
+        if opens { self.side = true; }
         cx.notify();
     }
 
