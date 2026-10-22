@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod chat;
+pub mod commands;
 pub mod composer;
 pub mod home;
 pub mod images;

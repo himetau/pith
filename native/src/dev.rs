@@ -9,6 +9,9 @@
 //   {"view": "home|settings|usage|agents|images"}  switch page
 //   {"dump": true}                the app's state as json
 //   {"resize": [w, h]}
+//   {"drop": ["<path>", ...], "at": [x, y]}   files dragged onto the window, then {"release": [x, y]} drops them
+//   {"event": {...}}              a pi event into the open session
+//   {"paste": {"image": "<png>"}} / {"paste": {"text": "..."}}   what the composer does with a paste (no clipboard here)
 use crate::state::app::{Pith, View};
 use crate::state::tab::ItemKind;
 use gpui_kit::*;
@@ -80,6 +83,30 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
     } else if let Some(v) = cmd["view"].as_str() {
         let v = match v { "settings" => View::Settings, "usage" => View::Usage, "agents" => View::Agents, "images" => View::Images, "chat" => View::Chat, _ => View::Home };
         app.update(cx, |a, cx| a.show(v, cx));
+    } else if let Some(paths) = cmd["drop"].as_array() {
+        // files dragged in from outside and let go at "at"
+        let pos = point(pt(&cmd["at"], 0), pt(&cmd["at"], 1));
+        let paths = ExternalPaths(paths.iter().filter_map(|p| p.as_str().map(std::path::PathBuf::from)).collect());
+        window.dispatch_event(PlatformInput::FileDrop(FileDropEvent::Entered { position: pos, paths }), cx);
+    } else if cmd["release"].is_array() {
+        // lets go of a drag "drop" started, a frame later so the hover has been worked out
+        let pos = point(pt(&cmd["release"], 0), pt(&cmd["release"], 1));
+        window.dispatch_event(PlatformInput::FileDrop(FileDropEvent::Pending { position: pos }), cx);
+        window.dispatch_event(PlatformInput::FileDrop(FileDropEvent::Submit { position: pos }), cx);
+    } else if cmd["paste"].is_object() {
+        // the headless compositor has no clipboard, so this hands the composer what a paste would
+        let item = match (cmd["paste"]["image"].as_str(), cmd["paste"]["text"].as_str()) {
+            (Some(p), _) => ClipboardItem::new_image(&Image::from_bytes(ImageFormat::Png, std::fs::read(p).unwrap_or_default())),
+            (_, Some(t)) => ClipboardItem::new_string(t.to_string()),
+            _ => return json!({ "ok": false, "error": "paste needs image or text" }),
+        };
+        let Some(c) = crate::ui::composer::last_focused() else { return json!({ "ok": false, "error": "no composer" }) };
+        let used = c.update(cx, |c, cx| c.paste(&item, window, cx));
+        return json!({ "ok": true, "used": used });
+    } else if cmd["event"].is_object() {
+        // as if pi had sent it to the open session, e.g. an extension_ui_request
+        let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
+        t.update(cx, |t, cx| t.on_event(&cmd["event"], cx));
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));
     } else if let Some(url) = cmd["webtest"]["url"].as_str() {

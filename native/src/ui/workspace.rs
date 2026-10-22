@@ -90,6 +90,16 @@ impl Workspace {
         c
     }
 
+    // files dropped anywhere in the window land in the composer that's showing
+    fn drop_paths(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let composer = match (self.app.read(cx).view, self.app.read(cx).active.clone()) {
+            (View::Chat, Some(t)) => self.chats.get(&t.entity_id()).map(|c| c.read(cx).composer.clone()),
+            (View::Home, _) => Some(self.home.read(cx).composer()),
+            _ => None,
+        };
+        if let Some(c) = composer { c.update(cx, |c, cx| c.add_paths(paths.paths(), window, cx)); }
+    }
+
     fn new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.app.update(cx, |a, cx| a.show(View::Home, cx));
         Home::focus(&self.home.clone(), window, cx);
@@ -98,27 +108,27 @@ impl Workspace {
     fn palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let app = self.app.clone();
         let mut items = vec![
-            PickItem::new("New session", { let w = cx.entity(); move |window, cx| w.update(cx, |w, cx| w.new_session(window, cx)) }).group("Go").right(if cfg!(target_os = "macos") { "⌘N" } else { "Ctrl+N" }),
-            PickItem::new("Settings", { let a = app.clone(); move |_, cx| a.update(cx, |a, cx| a.show(View::Settings, cx)) }).group("Go"),
-            PickItem::new("Switch model", |window, cx| picker::models(window, cx)).group("Session"),
-            PickItem::new("Toggle sidebar", { let a = app.clone(); move |_, cx| a.update(cx, |a, cx| { let s = !a.sidebar; a.save_settings(serde_json::json!({ "sidebar": s }), cx) }) }).group("View"),
+            PickItem::new("New session", { let w = cx.entity(); move |window, cx| w.update(cx, |w, cx| w.new_session(window, cx)) }).group("Go").icon(IconName::SquarePen).keys("secondary-n"),
+            PickItem::new("Settings", { let a = app.clone(); move |_, cx| a.update(cx, |a, cx| a.show(View::Settings, cx)) }).group("Go").icon(IconName::Settings).keys("secondary-,"),
+            PickItem::new("Toggle sidebar", { let a = app.clone(); move |_, cx| a.update(cx, |a, cx| { let s = !a.sidebar; a.save_settings(serde_json::json!({ "sidebar": s }), cx) }) }).group("View").icon(IconName::PanelLeft).keys("secondary-b"),
         ];
         if let Some(t) = app.read(cx).active.clone() {
             let (t1, t2, t3) = (t.clone(), t.clone(), t.clone());
-            items.push(PickItem::new("Compact context", move |_, cx| t1.update(cx, |t, cx| t.compact(cx))).group("Session"));
-            items.push(PickItem::new("Start over in this session", move |_, cx| t2.update(cx, |t, cx| t.new_session(cx))).group("Session"));
-            items.push(PickItem::new("Rename session", move |window, cx| rename(t3.clone(), window, cx)).group("Session"));
+            items.push(PickItem::new("Switch model…", |window, cx| picker::models(window, cx)).group("Session").icon(IconName::Bot).keys("secondary-m"));
+            items.push(PickItem::new("Compact context", move |_, cx| t1.update(cx, |t, cx| t.compact(cx))).group("Session").icon(IconName::Shrink));
+            items.push(PickItem::new("Start over in this session", move |_, cx| t2.update(cx, |t, cx| t.new_session(cx))).group("Session").icon(IconName::Eraser));
+            items.push(PickItem::new("Rename session…", move |window, cx| rename(t3.clone(), window, cx)).group("Session").icon(IconName::PenLine));
             let cmds = t.read(cx).commands.clone();
             for c in cmds {
                 let t = t.clone();
                 let name = format!("/{}", c.name);
                 let n2 = name.clone();
-                items.push(PickItem::new(name, move |_, cx| t.update(cx, |t, cx| t.send(n2.clone(), vec![], crate::state::tab::How::Auto, cx))).hint(c.description.clone()).group("Command"));
+                items.push(PickItem::new(name, move |_, cx| t.update(cx, |t, cx| t.send(n2.clone(), vec![], crate::state::tab::How::Auto, cx))).hint(c.description.clone()).group("Commands").icon(IconName::Slash));
             }
         }
         for s in app.read(cx).sessions.iter().take(200) {
             let (a, f) = (app.clone(), s.file.clone());
-            items.push(PickItem::new(session_title(s), move |_, cx| a.update(cx, |a, cx| a.open(&f, cx))).group("Session").hint(super::tools::tilde(&s.cwd)).right(ago(s.updated)));
+            items.push(PickItem::new(session_title(s), move |_, cx| a.update(cx, |a, cx| a.open(&f, cx))).group("Recent sessions").icon(IconName::MessageSquare).hint(super::tools::tilde(&s.cwd)).right(ago(s.updated)));
         }
         picker::open(items, "Search sessions and commands", window, cx);
     }
@@ -323,6 +333,7 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &StopRun, _, cx| { if let Some(t) = this.app.read(cx).active.clone() { t.update(cx, |t, cx| t.abort(cx)); } }))
             .on_action(cx.listener(|this, _: &FocusComposer, window, cx| { if let Some(t) = this.app.read(cx).active.clone() { if let Some(c) = this.chats.get(&t.entity_id()).cloned() { ChatView::focus_composer(&c, window, cx); } } }))
             .on_action(cx.listener(|this, _: &TogglePanel, _, cx| this.app.update(cx, |a, cx| { a.side = !a.side; cx.notify(); })))
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.drop_paths(paths, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| cycle(&this.app, 1, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, _, cx| cycle(&this.app, -1, cx)))
             .when(sidebar, |d| d.child(self.sidebar(cx)))
