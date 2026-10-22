@@ -5,7 +5,7 @@
 #   native/dev/run.sh [name] stop     stop the app and its sway
 #   native/dev/shot.sh [name] out.png screenshot
 #   native/dev/ctl.py [name] '<json>' drive it, see src/dev.rs for the commands
-# state lives in $PITH_DEV_DIR/<name> (default /tmp/pith-native-dev). the fake model (dev/fakemodel.py) is shared, port 18734
+# state lives in $PITH_DEV_DIR/<name> (default /tmp/pith-native-dev). the fake model (dev/fakemodel.py) is shared, port ${FAKE_PORT:-18734}
 NAME=${1:-dev}
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 ST=${PITH_DEV_DIR:-/tmp/pith-native-dev}/$NAME
@@ -28,12 +28,12 @@ if ! { [ -f "$ST/sway.pid" ] && kill -0 "$(cat "$ST/sway.pid")" 2>/dev/null; }; 
   echo $! > "$ST/sway.pid"
   for _ in $(seq 1 50); do ls "$RT"/wayland-* >/dev/null 2>&1 && break; sleep 0.1; done
 fi
-if ! curl -s -m 1 http://127.0.0.1:18734/v1/models >/dev/null; then
-  setsid python3 -I "$HERE/dev/fakemodel.py" 18734 > /tmp/pith-native-fakemodel.log 2>&1 &
+if ! curl -s -m 1 http://127.0.0.1:${FAKE_PORT:-18734}/v1/models >/dev/null; then
+  setsid python3 -I "$HERE/dev/fakemodel.py" ${FAKE_PORT:-18734} > /tmp/pith-native-fakemodel.log 2>&1 &
   sleep 0.4
 fi
-cat > "$ST/agent/models.json" <<'EOF'
-{ "providers": { "fake": { "baseUrl": "http://127.0.0.1:18734/v1", "api": "openai-completions", "apiKey": "fake", "models": [
+cat > "$ST/agent/models.json" <<EOF
+{ "providers": { "fake": { "baseUrl": "http://127.0.0.1:${FAKE_PORT:-18734}/v1", "api": "openai-completions", "apiKey": "fake", "models": [
   { "id": "fake-1", "name": "Fake One", "reasoning": true, "input": ["text"], "contextWindow": 200000, "maxTokens": 8000, "cost": { "input": 1, "output": 5, "cacheRead": 0.1, "cacheWrite": 1 } },
   { "id": "fake-2", "name": "Fake Two", "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 8000, "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 } } ] } } }
 EOF

@@ -69,6 +69,17 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         app.update(cx, |a, cx| a.show(v, cx));
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));
+    } else if let Some(url) = cmd["webtest"]["url"].as_str() {
+        // loads a page offscreen, writes its title and a snapshot next to "out"
+        let (url, out) = (url.to_string(), cmd["webtest"]["out"].as_str().unwrap_or("/tmp/webtest.png").to_string());
+        cx.background_spawn(async move {
+            crate::core::web::open("devweb", &url, 1000, 700);
+            crate::core::web::wait_loaded("devweb", std::time::Duration::from_secs(15)).await;
+            let title = crate::core::web::eval("devweb", "return document.title + ' | ' + location.href").await;
+            let png = crate::core::web::snapshot("devweb").await;
+            let _ = std::fs::write(format!("{out}.json"), json!({ "title": format!("{title:?}"), "png": png.as_ref().map(|p| p.len()).map_err(|e| e.clone()) }).to_string());
+            if let Ok(p) = png { let _ = std::fs::write(&out, p); }
+        }).detach();
     } else if cmd["dump"].as_bool() == Some(true) {
         let a = app.read(cx);
         let tabs: Vec<Value> = a.tabs.iter().map(|t| {

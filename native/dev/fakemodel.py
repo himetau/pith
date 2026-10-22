@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # a stand-in for an openai-compatible chat completions endpoint, so pith can be driven end to end with no real model.
 # scripted by the last user message:
+#   contains "browse" -> the browser tool navigates to the url in the message
 #   contains "tool"  -> a bash tool call (ls), then a markdown summary once the result comes back
 #   contains "long"  -> a long markdown reply with a code block and a table, streamed slowly
 #   anything else    -> reasoning, then a short markdown reply
@@ -60,7 +61,12 @@ class H(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("content-type", "text/event-stream"); self.send_header("cache-control", "no-cache"); self.end_headers()
         slow = 0.12 if "long" in text else 0.05
-        if "tool" in text and not after_tool:
+        if "browse" in text and not after_tool:
+            # "browse <url>" drives the browser tool
+            url = next((w for w in text.split() if "://" in w or w.startswith("/")), "about:blank")
+            self.send({"tool_calls": [{"index": 0, "id": "call_b", "type": "function", "function": {"name": "browser", "arguments": json.dumps({"action": "navigate", "url": url})}}]})
+            self.send({}, "tool_calls")
+        elif "tool" in text and not after_tool:
             for c in chunks("Let me look at the folder first.", 3):
                 self.send({"content": c}); time.sleep(slow)
             self.send({"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "bash", "arguments": ""}}]})

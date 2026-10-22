@@ -127,6 +127,8 @@ pub enum TabEvent {
     Draft(String),
     Settled,
     Preview,
+    // the agent is driving the session's browser page
+    Browser,
     ToolDone(String),
 }
 impl EventEmitter<TabEvent> for Tab {}

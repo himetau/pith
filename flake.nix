@@ -81,8 +81,9 @@
         buildFeatures = lib.optionals stdenv.hostPlatform.isDarwin [ "runtime-shaders" ];
         doCheck = false;
 
-        nativeBuildInputs = [ pkg-config makeBinaryWrapper ] ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
-        buildInputs = lib.optionals stdenv.hostPlatform.isLinux ([ fontconfig freetype stdenv.cc.cc.lib ] ++ runtimeLibs)
+        nativeBuildInputs = [ pkg-config makeBinaryWrapper ] ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook wrapGAppsHook3 ];
+        # webkitgtk renders the browser and preview pages offscreen (core/web.rs), it isn't in the window
+        buildInputs = lib.optionals stdenv.hostPlatform.isLinux ([ fontconfig freetype stdenv.cc.cc.lib webkitgtk_4_1 gtk3 libsoup_3 glib-networking ] ++ runtimeLibs)
           ++ lib.optionals stdenv.hostPlatform.isDarwin [ apple-sdk_15 ];
         runtimeDependencies = lib.optionals stdenv.hostPlatform.isLinux runtimeLibs;
 
@@ -90,10 +91,14 @@
         postInstall = ''
           mkdir -p $out/lib/pith
           cp -r ext prompts $out/lib/pith/
+        '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
           wrapProgram $out/bin/pith --suffix PATH : ${path}
         '' + lib.optionalString stdenv.hostPlatform.isLinux ''
           install -Dm644 packaging/pith.desktop $out/share/applications/pith.desktop
           install -Dm644 packaging/icon.png $out/share/icons/hicolor/512x512/apps/pith.png
+        '';
+        preFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
+          gappsWrapperArgs+=(--suffix PATH : ${path})
         '';
 
         meta = {

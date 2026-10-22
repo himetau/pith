@@ -16,6 +16,8 @@ pub enum Msg {
     Rec(String, Value),
     Exit(String, Option<i32>, String),
     Preview(String, Value),
+    // the agent used the browser: the panel should show it
+    Browser(String),
 }
 
 #[derive(Clone, Debug)]
@@ -79,7 +81,12 @@ impl Pith {
                 let s = sys::load_settings();
                 Ok(json!({ "model": s["imageModel"], "provider": s["imageProvider"], "dir": sys::images_dir(), "pi": s["piPath"], "cost": s["imageCost"] }))
             }
-            "browser" => Err("the browser pane isn't in this build yet".into()),
+            "browser" => {
+                // the user should see the agent drive it
+                let _ = btx.send_blocking(Msg::Browser(tab.clone()));
+                let home = sys::load_settings()["browserHome"].as_str().unwrap_or("about:blank").to_string();
+                futures::executor::block_on(crate::core::browser::run(&tab, args, &home))
+            }
             _ => Err(format!("unknown op {op}")),
         });
         let spawner: Spawner = Arc::new(move |tab: &str, cwd: &str, session: Option<&str>, kind: Kind, mode: Mode| {
@@ -126,7 +133,7 @@ impl Pith {
     }
 
     fn route(&mut self, msg: Msg, cx: &mut Context<Self>) {
-        let id = match &msg { Msg::Rec(t, _) | Msg::Exit(t, _, _) | Msg::Preview(t, _) => t.clone() };
+        let id = match &msg { Msg::Rec(t, _) | Msg::Exit(t, _, _) | Msg::Preview(t, _) | Msg::Browser(t) => t.clone() };
         let Some(tab) = self.tabs.iter().find(|t| t.read(cx).id == id).cloned() else { return };
         match msg {
             Msg::Rec(_, rec) => {
@@ -139,6 +146,7 @@ impl Pith {
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
             Msg::Preview(_, args) => tab.update(cx, |t, cx| { t.preview = Some(args); cx.emit(TabEvent::Preview); }),
+            Msg::Browser(_) => tab.update(cx, |_, cx| cx.emit(TabEvent::Browser)),
         }
         cx.notify();
     }
