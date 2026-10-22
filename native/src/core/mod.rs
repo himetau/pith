@@ -4,6 +4,7 @@ pub mod bridge;
 pub mod browser;
 pub mod imagegen;
 pub mod pi;
+pub mod preview;
 pub mod sessions;
 pub mod sys;
 pub mod term;

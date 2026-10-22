@@ -145,7 +145,11 @@ impl Pith {
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
-            Msg::Preview(_, args) => tab.update(cx, |t, cx| { t.preview = Some(args); cx.emit(TabEvent::Preview); }),
+            Msg::Preview(_, args) => tab.update(cx, |t, cx| {
+                crate::core::preview::show(&t.id, args["path"].as_str(), args["url"].as_str());
+                t.preview = Some(args);
+                cx.emit(TabEvent::Preview);
+            }),
             Msg::Browser(_) => tab.update(cx, |_, cx| cx.emit(TabEvent::Browser)),
         }
         cx.notify();
@@ -208,6 +212,10 @@ impl Pith {
 
     pub fn close(&mut self, tab: &Entity<Tab>, cx: &mut Context<Self>) {
         tab.update(cx, |t, cx| t.stop(cx));
+        // its offscreen pages go with it
+        let id = tab.read(cx).id.clone();
+        crate::core::preview::close(&id);
+        crate::core::web::close(&crate::core::browser::page_id(&id));
         self.tabs.retain(|t| t != tab);
         self._subs.remove(&tab.entity_id());
         if self.active.as_ref() == Some(tab) {
