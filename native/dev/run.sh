@@ -1,6 +1,6 @@
 #!/bin/bash
 # runs this checkout's native debug build on its own headless sway, against a fake model and a scratch pi + pith config,
-# so nothing touches your screen, your sessions or your keys.
+# so nothing touches your screen, your sessions or your keys. no session bus and notify off, so no desktop notifications either
 #   native/dev/run.sh [name]          (re)start the app. name keeps parallel runs apart, default "dev"
 #   native/dev/run.sh [name] stop     stop the app and its sway
 #   native/dev/shot.sh [name] out.png screenshot
@@ -40,7 +40,7 @@ cat > "$ST/agent/models.json" <<EOF
   { "id": "fake-2", "name": "Fake Two", "reasoning": false, "input": ["text", "image"], "contextWindow": 128000, "maxTokens": 8000, "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 } } ] } } }
 EOF
 echo '{ "defaultProvider": "fake", "defaultModel": "fake-1", "lastChangelogVersion": "1.3.0" }' > "$ST/agent/settings.json"
-[ -f "$ST/xdg/config/pith/settings.json" ] || echo "{ \"defaultCwd\": \"$ST/work\", \"mode\": \"auto\" }" > "$ST/xdg/config/pith/settings.json"
+[ -f "$ST/xdg/config/pith/settings.json" ] || echo "{ \"defaultCwd\": \"$ST/work\", \"mode\": \"auto\", \"notify\": false }" > "$ST/xdg/config/pith/settings.json"
 [ -f "$ST/work/notes.txt" ] || { echo "hello" > "$ST/work/notes.txt"; git -C "$ST/work" init -q 2>/dev/null; }
 
 stop_app
@@ -48,7 +48,7 @@ rm -f "$ST"/ctl/*
 cd "$HERE" || exit 1
 env XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY=wayland-1 RUST_LOG=${RUST_LOG:-warn} PITH_CTL="$ST/ctl" \
   PI_CODING_AGENT_DIR="$ST/agent" PI_OFFLINE=1 XDG_CONFIG_HOME="$ST/xdg/config" XDG_DATA_HOME="$ST/xdg/data" \
-  setsid "./target/${BUILD:-debug}/pith" > "$ST/app.log" 2>&1 &
+  DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent setsid "./target/${BUILD:-debug}/pith" > "$ST/app.log" 2>&1 &
 echo $! > "$ST/app.pid"
 # ready once the control dir answers
 for _ in $(seq 1 60); do python3 -I "$HERE/dev/ctl.py" "$NAME" '{"dump":true}' 2>/dev/null | grep -q '"ok":true' && exit 0; sleep 0.1; done
