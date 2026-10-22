@@ -215,7 +215,7 @@ impl Composer {
             cmds.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             Some((MenuKind::Slash, 0, cmds.into_iter().take(MENU_CAP).map(|(c, _)| MenuRow {
                 label: format!("/{}", c.name).into(),
-                hint: format!("{}{}", c.desc, c.arg.as_ref().map(|a| format!("  {a}")).unwrap_or_default()).into(),
+                hint: format!("{}{}", c.desc, c.arg.as_ref().map(|a| format!(" {a}")).unwrap_or_default()).into(),
                 src: c.tag().map(SharedString::from),
                 insert: format!("/{} ", c.name),
             }).collect::<Vec<_>>()))
@@ -509,7 +509,7 @@ impl Render for Composer {
                 let m = &t.state["model"];
                 let name = m["name"].as_str().filter(|s| !s.is_empty()).or(m["id"].as_str()).map(String::from);
                 let lvl = t.state["thinkingLevel"].as_str().filter(|l| !l.is_empty() && m["reasoning"] == true);
-                let model = match name { Some(n) => match lvl { Some(l) => format!("{n}  ·  {l}"), None => n }, None => "…".into() };
+                let model = match name { Some(n) => match lvl { Some(l) => format!("{n} · {l}"), None => n }, None => "…".into() };
                 let cu = &t.stats["contextUsage"];
                 let ctx = cu["contextWindow"].as_u64().filter(|w| *w > 0).map(|w| (cu["percent"].as_f64().unwrap_or(0.), cu["tokens"].as_u64(), w));
                 (t.running(), Some(model), ctx)
@@ -557,7 +557,7 @@ impl Render for Composer {
         let send = div().id("c-send").flex_none().w(u(30.)).h(u(28.)).rounded(u(g.r2)).flex().items_center().justify_center().cursor_pointer()
             .when(running, |d| d.bg(p.high).text_color(p.text).hover(move |s| s.bg(stop_hover)))
             .when(!running, |d| d.bg(p.primary).text_color(p.on_primary))
-            .child(Icon::new(if stop { IconName::Square } else { IconName::ArrowUp }).size(u(fs * if stop { 1.0 } else { 1.2 })))
+            .child(Icon::new(if stop { IconName::Square } else { IconName::ArrowUp }).size(u(fs * if stop { 0.8 } else { 1.2 })))
             .tooltip(move |w, cx| Tooltip::new(send_tip).build(w, cx))
             .on_click(cx.listener(move |this, _, window, cx| if stop { cx.emit(ComposerEvent::Stop) } else { this.submit(How::Auto, window, cx) }));
         let footer = h_flex().items_center().gap(u(10.)).mt(u(6.)).min_h(u(28.))

@@ -117,6 +117,8 @@ pub struct Todo { pub content: String, pub status: String }
 pub struct Command { pub name: String, pub description: String, pub source: String }
 
 #[derive(Clone, Debug)]
+// `until` is when the next try goes; the live line only says which try it is, like chat.ts
+#[allow(dead_code)]
 pub struct Retry { pub attempt: u64, pub max: u64, pub until: Instant, pub error: String }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -804,6 +806,23 @@ impl Tab {
     pub fn new_session(&mut self, cx: &mut Context<Self>) {
         self.with_pi(json!({ "type": "new_session" }), cx, |t, r, cx| {
             if r["success"] == true && r["data"]["cancelled"] != true { t.name = None; t.reload_state(true, cx); }
+        });
+    }
+
+    // a copy of this session as a new one, which this tab moves on to (tab.ts clone)
+    pub fn clone_session(&mut self, cx: &mut Context<Self>) {
+        self.with_pi(json!({ "type": "clone" }), cx, |t, r, cx| {
+            if r["success"] == true && r["data"]["cancelled"] != true { t.reload_state(true, cx); }
+        });
+    }
+
+    // pi writes the session out as an html page; `done` gets its path
+    pub fn export_html(&mut self, cx: &mut Context<Self>, done: impl FnOnce(String, &mut App) + 'static) {
+        self.with_pi(json!({ "type": "export_html" }), cx, move |t, r, cx| {
+            match r["data"]["path"].as_str().filter(|_| r["success"] == true) {
+                Some(p) => done(p.to_string(), cx),
+                None => t.note(Level::Error, r["error"].as_str().unwrap_or("export failed").to_string(), cx),
+            }
         });
     }
 

@@ -153,7 +153,7 @@ impl Render for Working {
                 .tooltip(move |w, cx| Tooltip::new(if open { "hide the steps" } else { "show what it's doing, step by step" }).build(w, cx))
                 .on_click(cx.listener(|this, _, _, cx| { this.steps_open = !this.steps_open; cx.notify(); }));
             let steps = if open { run_steps(&self.tab, cx) } else { None };
-            return line.child(head).child(dim("·  esc to stop".into())).children(steps).into_any_element();
+            return line.child(head).child(dim("· esc to stop".into())).children(steps).into_any_element();
         }
         div().into_any_element()
     }

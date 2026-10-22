@@ -232,7 +232,7 @@ impl Asks {
                         .child(div().pt(u(2.)).child(kbd((i + 1).to_string(), cx)))
                         .when(multi, |d| d.child(div().flex_none().mt(u(3.)).size(u(14.)).rounded(u(3.)).border_1().border_color(p.line).flex().items_center().justify_center().text_color(p.accent)
                             .when(on, |d| d.child(Icon::new(IconName::Check).size(u(11.))))))
-                        .child(v_flex().min_w_0()
+                        .child(v_flex().min_w_0().gap(u(8.))
                             .child(div().text_color(if on { p.accent } else { p.text }).child(label))
                             .when_some(o["description"].as_str(), |d, s| d.child(div().text_size(u(g.fs * 0.88)).font_family(g.prose.clone()).text_color(p.dim).child(s.to_string()))))
                         .on_click(move |_, _, cx| { let _ = me.update(cx, |this, cx| this.pick_row(&i2, i, multi, l2.clone(), cx)); }));
@@ -301,7 +301,7 @@ fn field(f: &Field, window: &Window, cx: &App) -> AnyElement {
         Field::Line(s) => (s.read(cx).focus_handle(cx), Input::new(s).appearance(false).p(u(0.)).h_auto().into_any_element()),
         Field::Area(s) => (s.read(cx).focus_handle(cx), Textarea::new(s).appearance(false).xsmall().mx(u(-4.)).into_any_element()),
     };
-    div().flex_1().min_w_0().py(u(5.)).px(u(10.)).rounded(u(g.r2)).bg(p.raised).border_1()
+    div().flex_1().min_w_0().py(u(6.)).px(u(10.)).rounded(u(g.r2)).bg(p.raised).border_1()
         .border_color(if focus.is_focused(window) { p.primary } else { p.line })
         .child(el).into_any_element()
 }

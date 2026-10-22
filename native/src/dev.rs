@@ -12,6 +12,7 @@
 //   {"drop": ["<path>", ...], "at": [x, y]}   files dragged onto the window, then {"release": [x, y]} drops them
 //   {"event": {...}}              a pi event into the open session
 //   {"paste": {"image": "<png>"}} / {"paste": {"text": "..."}}   what the composer does with a paste (no clipboard here)
+//   {"quote": {"label": "...", "text": "..."}}  a quote chip into the open session's composer
 use crate::state::app::{Pith, View};
 use crate::state::tab::ItemKind;
 use gpui_kit::*;
@@ -107,6 +108,11 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         // as if pi had sent it to the open session, e.g. an extension_ui_request
         let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
         t.update(cx, |t, cx| t.on_event(&cmd["event"], cx));
+    } else if cmd["quote"].is_object() {
+        // what preview comments, the terminal and findings send: a quote chip in the open session's composer
+        let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
+        let (label, text) = (cmd["quote"]["label"].as_str().unwrap_or("").to_string(), cmd["quote"]["text"].as_str().unwrap_or("").to_string());
+        t.update(cx, |_, cx| cx.emit(crate::state::tab::TabEvent::Quote { label, text }));
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));
     } else if let Some(url) = cmd["webtest"]["url"].as_str() {
