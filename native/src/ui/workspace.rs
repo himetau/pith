@@ -8,7 +8,7 @@ use super::images::ImagesPage;
 use super::panes::SidePanel;
 use super::settings::SettingsPage;
 use super::usage::UsagePage;
-use super::theme::pal;
+use super::theme::{geo, pal, u};
 use crate::core::sessions::SessionInfo;
 use crate::state::app::{Pith, View};
 use crate::state::tab::{Kind, Level, Status, Tab};
@@ -59,6 +59,9 @@ pub struct Workspace {
     query: String,
     collapsed: std::collections::HashSet<String>,
     focus: FocusHandle,
+    status: Entity<super::status::StatusLine>,
+    // which window has the active border: 0 sidebar, 1 main, 2 side. focus follows the mouse into a window, like the compositor
+    focus_win: u8,
     _subs: Vec<Subscription>,
 }
 
@@ -79,7 +82,8 @@ impl Workspace {
             cx.subscribe_in(&search, window, |this, s, ev: &InputEvent, _, cx| if let InputEvent::Change = ev { this.query = s.read(cx).value().to_string(); cx.notify(); }),
             cx.observe_window_appearance(window, |_, window, cx| super::theme::apply(Some(window), cx)),
         ];
-        Workspace { app, home, settings: None, usage: None, agents: None, images: None, side: None, chats: HashMap::new(), search, query: String::new(), collapsed: Default::default(), focus: cx.focus_handle(), _subs: subs }
+        let status = cx.new(super::status::StatusLine::new);
+        Workspace { app, home, settings: None, usage: None, agents: None, images: None, side: None, chats: HashMap::new(), search, query: String::new(), collapsed: Default::default(), focus: cx.focus_handle(), status, focus_win: 1, _subs: subs }
     }
 
     fn chat_for(&mut self, tab: &Entity<Tab>, window: &mut Window, cx: &mut Context<Self>) -> Entity<ChatView> {
@@ -186,16 +190,8 @@ impl Workspace {
         }
 
         let a1 = self.app.clone();
-        let mac = cfg!(target_os = "macos");
-        v_flex().w(px(SIDE_W)).h_full().flex_none().bg(cx.theme().sidebar).border_r_1().border_color(cx.theme().sidebar_border)
-            .child(
-                // the strip the window is dragged by, with the traffic lights on macos
-                h_flex().h(px(TOP)).flex_none().pl(px(if mac { 84. } else { 14. })).pr_2().items_center().window_control_area(WindowControlArea::Drag)
-                    .on_mouse_down(MouseButton::Left, |_, window, _| if !cfg!(target_os = "macos") { window.start_window_move() })
-                    .when(!mac, |d| d.child(div().font_weight(FontWeight::SEMIBOLD).text_color(cx.theme().foreground).child("pith")))
-                    .child(div().flex_1())
-                    .child(Button::new("sb-new").icon(IconName::SquarePen).ghost().small().tooltip("New session").on_click(cx.listener(|this, _, window, cx| this.new_session(window, cx)))),
-            )
+        let _ = (a1.clone(), cfg!(target_os = "macos"));
+        v_flex().size_full().pt(u(12.))
             .child(div().px_2().pb_2().child(Input::new(&self.search).small().prefix(Icon::new(IconName::Search).xsmall().text_color(p.dim)).cleanable(true)))
             .child(div().id("sb-list").flex_1().min_h_0().overflow_y_scroll().px_2().pb_2().children(rows))
             .child(
@@ -226,35 +222,38 @@ impl Workspace {
             .into_any_element()
     }
 
-    // ---------- header ----------
-    fn header(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    // ---------- the main window's legends: what's open on the left, the panes and a menu on the right ----------
+    fn legends(&mut self, focused: bool, cx: &mut Context<Self>) -> (Div, Option<Div>) {
+        use super::frame::{legend, legend_btn, legend_sub, legend_t, legend_tag, Side};
+        use super::panes::Pane;
+        let gutter = pal(cx).gutter;
         let app = self.app.read(cx);
-        let p = pal(cx);
-        let title: String = match app.view {
-            View::Home => String::new(),
-            View::Settings => "Settings".into(),
-            View::Usage => "Usage".into(),
-            View::Agents => "Agents".into(),
-            View::Images => "Images".into(),
-            View::Chat => app.active.as_ref().map(|t| t.read(cx).title()).unwrap_or_default(),
+        let t = if app.view == View::Chat { app.active.clone() } else { None };
+        let Some(t) = t else {
+            let name = match app.view { View::Settings => "settings", View::Usage => "usage", View::Agents => "agents", View::Images => "images", _ => "home" };
+            return (legend(Side::L, gutter, cx).child(legend_t(name, focused, cx)), None);
         };
-        // just the folder's name: the sidebar already groups by project, and a full path crowds the title out
-        let cwd = if app.view == View::Chat { app.active.as_ref().map(|t| { let c = t.read(cx).cwd.clone(); std::path::Path::new(&c).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(c) }) } else { None };
-        let sidebar = app.sidebar;
-        let mac = cfg!(target_os = "macos");
-        let a = self.app.clone();
-        h_flex().h(px(TOP)).flex_none().px_3().gap_2().items_center().window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, |_, window, _| if !cfg!(target_os = "macos") { window.start_window_move() })
-            .when(!sidebar, |d| d.pl(px(if mac { 84. } else { 12. })))
-            .child(Button::new("toggle-side").icon(if sidebar { IconName::PanelLeftClose } else { IconName::PanelLeftOpen }).ghost().small().tooltip("Toggle sidebar")
-                .on_click(move |_, _, cx| a.update(cx, |a, cx| { let s = !a.sidebar; a.save_settings(serde_json::json!({ "sidebar": s }), cx) })))
-            .child(div().min_w_0().truncate().font_weight(FontWeight::MEDIUM).text_color(cx.theme().foreground).child(title))
-            .when_some(cwd, |d, c| d.child(div().flex_none().text_xs().text_color(p.dim).child(c)))
-            .child(div().flex_1())
-            .when(app.view == View::Chat, |d| d.child(Button::new("toggle-panel").icon(if app.side { IconName::PanelRightClose } else { IconName::PanelRightOpen }).ghost().small().tooltip("Changes, files, terminal")
-                .on_click(cx.listener(|this, _, _, cx| this.app.update(cx, |a, cx| { a.side = !a.side; cx.notify(); })))))
-            .child(Button::new("palette").icon(IconName::Command).ghost().small().tooltip(if mac { "Command palette ⌘K" } else { "Command palette Ctrl+K" })
-                .on_click(cx.listener(|this, _, window, cx| this.palette(window, cx))))
+        let (title, cwd, design) = { let t = t.read(cx); (t.title(), super::tools::tilde(&t.cwd), t.kind == Kind::Design) };
+        let side_open = app.side;
+        let cur = self.side.as_ref().map(|s| s.read(cx).current());
+        let l = legend(Side::L, gutter, cx).max_w(relative(0.8))
+            .when(design, |d| d.child(legend_tag("design", cx)))
+            .child(legend_t(title, focused, cx).flex_none().max_w(u(46. * 8.)))
+            .child(legend_sub(cwd, cx));
+        let panes = [(Pane::Browser, IconName::Globe, "web (alt+1)"), (Pane::Preview, IconName::AppWindow, "preview (alt+2)"), (Pane::Changes, IconName::GitCompare, "changes (alt+3)"),
+            (Pane::Files, IconName::File, "files (alt+4)"), (Pane::Agents, IconName::Users, "agents (alt+5)"), (Pane::Terminal, IconName::SquareTerminal, "term (alt+6)")];
+        let fsz = super::theme::geo(cx).fs * 0.84 * 1.45;
+        let r = legend(Side::R, gutter, cx)
+            .children(panes.into_iter().map(|(pane, icon, tip)| {
+                let on = side_open && cur == Some(pane);
+                let a = self.app.clone();
+                legend_btn(SharedString::from(format!("lp-{tip}")), on, cx).px(u(4.)).tooltip(move |w, cx| gpui_kit::component::tooltip::Tooltip::new(tip).build(w, cx))
+                    .child(Icon::new(icon).size(u(fsz)))
+                    .on_click(move |_, _, cx| if on { a.update(cx, |a, cx| { a.side = false; cx.notify(); }) } else { super::panes::open(pane, cx) })
+            }))
+            .child(legend_btn("lp-more", false, cx).px(u(4.)).child(Icon::new(IconName::Ellipsis).size(u(fsz)))
+                .on_click(cx.listener(|this, _, window, cx| this.palette(window, cx))));
+        (l, Some(r))
     }
 
     fn toasts(&self, cx: &App) -> impl IntoElement {
@@ -308,6 +307,38 @@ fn rename(tab: Entity<Tab>, window: &mut Window, cx: &mut App) {
     input.read(cx).focus_handle(cx).focus(window, cx);
 }
 
+impl Workspace {
+    // #app's grid: the sidebar window, the main one, the side one, the status line under all three
+    fn windows(&mut self, sidebar: bool, side_open: bool, side_w: f32, content: AnyElement, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (p, g) = (pal(cx), geo(cx));
+        let fw = self.focus_win;
+        let mut row = h_flex().flex_1().min_h_0().gap(u(g.gap)).items_stretch();
+        if sidebar {
+            let body = self.sidebar(cx);
+            row = row.child(super::frame::win(cx).id("win-side").w(u(SIDE_W)).flex_none()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { if this.focus_win != 0 { this.focus_win = 0; cx.notify(); } }))
+                .child(body)
+                .child(super::frame::edge(super::frame::win_color(fw == 0, cx), cx))
+                .child(super::frame::legend(super::frame::Side::L, p.gutter, cx).child(super::frame::legend_t("pith", fw == 0, cx))));
+        }
+        let (l, r) = self.legends(fw == 1, cx);
+        row = row.child(super::frame::win(cx).id("win-main").flex_1().min_w_0()
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { if this.focus_win != 1 { this.focus_win = 1; cx.notify(); } }))
+            .child(div().flex_1().min_h_0().flex().flex_col().overflow_hidden().rounded(u(g.round)).child(content))
+            .child(super::frame::edge(super::frame::win_color(fw == 1, cx), cx))
+            .child(l).children(r)
+            .child(self.toasts(cx)));
+        if side_open {
+            let side = self.side.get_or_insert_with(|| cx.new(|cx| SidePanel::new(window, cx))).clone();
+            row = row.child(super::frame::win(cx).id("win-pane").w(u(side_w)).flex_none()
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { if this.focus_win != 2 { this.focus_win = 2; cx.notify(); } }))
+                .child(div().flex_1().min_h_0().flex().flex_col().overflow_hidden().rounded(u(g.round)).child(side))
+                .child(super::frame::edge(super::frame::win_color(fw == 2, cx), cx)));
+        }
+        v_flex().flex_1().min_h_0().gap(u(g.gap)).child(row).child(div().h(u(26.)).flex_none().child(self.status.clone()))
+    }
+}
+
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let app = self.app.read(cx);
@@ -323,8 +354,10 @@ impl Render for Workspace {
             (View::Images, _) => self.images.get_or_insert_with(|| cx.new(|cx| ImagesPage::new(window, cx))).clone().into_any_element(),
             _ => self.home.clone().into_any_element(),
         };
-        h_flex().id("workspace").key_context("Workspace").track_focus(&self.focus).size_full().bg(cx.theme().background).text_color(cx.theme().foreground)
-            .font_family(cx.theme().font_family.clone()).text_size(cx.theme().font_size)
+        let (p, g) = (pal(cx), geo(cx));
+        v_flex().id("workspace").key_context("Workspace").track_focus(&self.focus).size_full().bg(p.gutter).text_color(p.text)
+            .font_family(g.mono.clone()).font_weight(g.weight).text_size(u(g.fs)).line_height(relative(1.55))
+            .pt(u(g.gap + 4.)).px(u(g.gap)).gap(u(g.gap))
             .on_action(cx.listener(|this, _: &NewSession, window, cx| this.new_session(window, cx)))
             .on_action(cx.listener(|this, _: &Palette, window, cx| this.palette(window, cx)))
             .on_action(cx.listener(|_, _: &SwitchModel, window, cx| picker::models(window, cx)))
@@ -337,12 +370,7 @@ impl Render for Workspace {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| this.drop_paths(paths, window, cx)))
             .on_action(cx.listener(|this, _: &NextTab, _, cx| cycle(&this.app, 1, cx)))
             .on_action(cx.listener(|this, _: &PrevTab, _, cx| cycle(&this.app, -1, cx)))
-            .when(sidebar, |d| d.child(self.sidebar(cx)))
-            .child(v_flex().flex_1().min_w_0().h_full().relative().child(self.header(cx)).child(div().flex_1().min_h_0().child(content)).child(self.toasts(cx)))
-            .when(side_open, |d| {
-                let side = self.side.get_or_insert_with(|| cx.new(|cx| SidePanel::new(window, cx))).clone();
-                d.child(div().w(px(side_w)).h_full().flex_none().border_l_1().border_color(cx.theme().border).child(side))
-            })
+            .child(self.windows(sidebar, side_open, side_w, content, window, cx))
     }
 }
 

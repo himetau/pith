@@ -132,6 +132,11 @@ pub enum TabEvent {
     // the agent is driving the session's browser page
     Browser,
     ToolDone(String),
+    // quote something into this session's composer as a chip, sent as a > blockquote before the text
+    // (preview comments, terminal "to chat", findings "fix this")
+    Quote { label: String, text: String },
+    // attach an image file to the composer (images page "use in the current chat")
+    Attach(std::path::PathBuf),
 }
 impl EventEmitter<TabEvent> for Tab {}
 

@@ -100,6 +100,7 @@ impl SidePanel {
         this
     }
 
+    pub fn current(&self) -> Pane { self.pane() }
     fn pane(&self) -> Pane { self.tab.as_ref().and_then(|t| self.pane.get(&t.entity_id()).copied()).unwrap_or(Pane::Changes) }
 
     // runs on every app notify, so it only does real work when the session, or the panel's visibility, moved

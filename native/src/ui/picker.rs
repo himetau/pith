@@ -258,3 +258,19 @@ pub fn models(window: &mut Window, cx: &mut App) {
     }).collect();
     open(items, "Switch model", window, cx);
 }
+
+// the mode picker, from the status line and the composer's legend
+pub fn modes(tab: Entity<crate::state::tab::Tab>, window: &mut Window, cx: &mut App) {
+    use crate::state::tab::Mode;
+    let cur = tab.read(cx).mode;
+    let items = Mode::ALL.into_iter().map(|m| { let t = tab.clone(); PickItem::new(m.as_str(), move |_, cx| t.update(cx, |t, cx| t.set_mode(m, cx))).hint(m.hint()).on(m == cur) }).collect();
+    open(items, "type to filter", window, cx);
+}
+
+// thinking effort, for models that take one
+pub fn effort(tab: Entity<crate::state::tab::Tab>, window: &mut Window, cx: &mut App) {
+    let (levels, cur) = { let t = tab.read(cx); (t.levels.clone(), t.state["thinkingLevel"].as_str().unwrap_or("").to_string()) };
+    if levels.is_empty() { tab.update(cx, |_, cx| cx.emit(crate::state::tab::TabEvent::Toast(crate::state::tab::Level::Info, "this model doesn't take an effort level".into()))); return; }
+    let items = levels.into_iter().map(|l| { let (t, l2) = (tab.clone(), l.clone()); PickItem::new(l.clone(), move |_, cx| t.update(cx, |t, cx| t.set_thinking(l2.clone(), cx))).on(l == cur) }).collect();
+    open(items, "type to filter", window, cx);
+}
