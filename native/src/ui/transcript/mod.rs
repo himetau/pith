@@ -3,3 +3,5 @@ pub mod code;
 pub mod dock;
 pub mod md;
 pub mod media;
+pub mod steps;
+pub mod text;

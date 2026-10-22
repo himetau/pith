@@ -59,7 +59,6 @@ pub fn bind_keys(cx: &mut App) {
     super::panes::bind_keys(cx);
 }
 
-pub const TOP: f32 = 44.;
 const SIDE_W: f32 = 264.;
 
 // panes.ts PANES: the order alt+1…6 and the legend buttons use

@@ -216,6 +216,13 @@ impl Pith {
         self.focus(tab, cx);
     }
 
+    // a subagent's session from a link in the chat (its card in a tool row, a todo that matches its task):
+    // watched off disk while the hub says it runs, an ordinary session otherwise
+    pub fn open_agent_run(&mut self, file: &str, cx: &mut Context<Self>) {
+        let q = super::hub::AgentRef { session_file: Some(file.to_string()), ..Default::default() };
+        match self.agent_run(&q, cx) { Some(run) => { self.open_agent(run, cx); } None => self.open(file, cx) }
+    }
+
     // a subagent's run as its own tab you can watch, and carry on in once it's done (app.openAgent)
     pub fn open_agent(&mut self, run: super::hub::AgentRun, cx: &mut Context<Self>) -> Entity<Tab> {
         if let Some(t) = self.tabs.iter().find(|t| t.read(cx).file.as_deref() == Some(run.file.as_str())).cloned() { self.focus(t.clone(), cx); return t; }

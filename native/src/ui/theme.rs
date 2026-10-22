@@ -43,6 +43,8 @@ pub fn mix(a: Hsla, p: f32, b: Hsla) -> Hsla {
 // color-mix with transparent is the colour at that opacity
 pub fn fade(a: Hsla, p: f32) -> Hsla { a.opacity(p) }
 
+// the whole matugen set, named as in css, whether or not a view uses each one yet
+#[allow(dead_code)]
 #[derive(Clone)]
 pub struct Pal {
     // matugen's names
@@ -96,7 +98,7 @@ impl Pal {
 
 // sizes, from hyprland and settings. css px go through u(), so the scale setting zooms everything like the webview did
 #[derive(Clone)]
-pub struct Geo { pub gap: f32, pub bw: f32, pub round: f32, pub r2: f32, pub fs: f32, pub scale: f32, pub side_w: f32, pub mono: SharedString, pub prose: SharedString, pub weight: FontWeight }
+pub struct Geo { pub gap: f32, pub bw: f32, pub round: f32, pub r2: f32, pub fs: f32, pub scale: f32, pub mono: SharedString, pub prose: SharedString, pub weight: FontWeight }
 
 struct Look { pal: Pal, geo: Geo }
 impl Global for Look {}
@@ -109,7 +111,6 @@ pub fn geo(cx: &App) -> Geo { cx.global::<Look>().geo.clone() }
 static BASE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x41600000); // 14.0
 pub fn u(v: f32) -> Rems { rems(v / f32::from_bits(BASE.load(std::sync::atomic::Ordering::Relaxed))) }
 // the body text size, and a fraction of it (css .9em)
-pub fn fs(cx: &App) -> Rems { u(geo(cx).fs) }
 pub fn em(cx: &App, f: f32) -> Rems { u(geo(cx).fs * f) }
 
 // pane gaps, borders and corners match the compositor's windows
@@ -143,7 +144,7 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
     let (gaps_in, border, rounding) = hypr();
     let geo = Geo {
         gap: gaps_in * 2., bw: border.max(1.), round: rounding, r2: rounding * 0.6, fs: fsize, scale,
-        side_w: settings["paneWidth"].as_f64().unwrap_or(520.) as f32, mono: mono.clone(), prose, weight: FontWeight(weight),
+        mono: mono.clone(), prose, weight: FontWeight(weight),
     };
     // the palette decides light or dark: matugen's surfaces are dark unless it was asked for a light scheme
     let dark = p.bg.l < 0.5;

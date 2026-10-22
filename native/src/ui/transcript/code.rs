@@ -122,27 +122,7 @@ pub fn frame(id: impl Into<SharedString>, copy: Option<String>, cx: &App) -> Div
 // wide enough for the longest number, so the code column lines up
 fn gutter_w(digits: usize, cx: &App) -> Pixels { cx.theme().mono_font_size * 0.9 * (0.62 * digits.max(2) as f32) + px(4.) }
 
-// coloured lines, numbered from `start` when there is one. `limit` cuts it short, the caller says what was left out
-pub fn code(id: impl Into<SharedString>, text: &str, lang: Option<&str>, start: Option<usize>, limit: usize, cx: &App) -> Div {
-    let p = pal(cx);
-    let ls = lines(text, lang, cx);
-    let shown = ls.len().min(limit);
-    let gw = start.map(|s| gutter_w((s + shown).to_string().len(), cx));
-    let mut col = v_flex().w_full().py_1p5().when(gw.is_none(), |d| d.px_3());
-    for (i, l) in ls.iter().take(shown).enumerate() {
-        col = col.child(h_flex().items_start().w_full().pr_8()
-            .when_some(gw.zip(start), |d, (w, s)| d.child(div().flex_none().w(w).mr_3().ml_2().text_right().text_color(p.dim.opacity(0.7)).child((s + i).to_string())))
-            .child(div().flex_1().min_w_0().child(styled(l))));
-    }
-    frame(id, Some(text.to_string()), cx).child(col)
-}
 
-// plain output: no gutter, no colours, the tail when it's live
-pub fn output(id: impl Into<SharedString>, text: &str, cx: &App) -> Div {
-    let p = pal(cx);
-    let body = if text.trim().is_empty() { div().text_color(p.dim).child("No output") } else { div().text_color(p.mid).child(text.trim_end_matches('\n').replace('\t', "    ")) };
-    frame(id, Some(text.to_string()), cx).child(div().px_3().py_2().pr_8().child(body))
-}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind { Add, Del, Same, Gap }
@@ -186,13 +166,6 @@ fn diff_rows(id: SharedString, rows: Vec<(Kind, String, String)>, lang: Option<&
     frame(id, Some(copy), cx).child(col)
 }
 
-pub fn diff(id: impl Into<SharedString>, diff: &str, lang: Option<&str>, limit: usize, cx: &App) -> Div {
-    let rows = parse_diff(diff);
-    // copying a diff gives the new side, the thing you'd paste somewhere
-    let copy = rows.iter().filter(|r| r.0 != Kind::Del && r.0 != Kind::Gap).map(|r| r.2.as_str()).collect::<Vec<_>>().join("\n");
-    diff_rows(id.into(), rows, lang, limit, copy, cx)
-}
-pub fn diff_len(diff: &str) -> usize { diff.lines().count() }
 
 // before pi sends its numbered diff (streaming, or a failed edit) the edit args are all there is
 pub fn edits(id: impl Into<SharedString>, edits: &[(String, String)], lang: Option<&str>, limit: usize, cx: &App) -> Div {
@@ -204,4 +177,31 @@ pub fn edits(id: impl Into<SharedString>, edits: &[(String, String)], lang: Opti
     }
     let copy = edits.iter().map(|e| e.1.as_str()).collect::<Vec<_>>().join("\n");
     diff_rows(id.into(), rows, lang, limit, copy, cx)
+}
+
+// a fence's language ("rs", "rust", "sh", "tsx") as tree-sitter's name
+pub fn fence_lang(lang: &str) -> Option<&'static str> {
+    let l = lang.to_ascii_lowercase();
+    match l.as_str() {
+        "" | "text" | "txt" | "plain" => None,
+        "rust" => Some("rust"), "typescript" => Some("typescript"), "javascript" | "js" | "jsx" => Some("javascript"), "python" | "py" => Some("python"),
+        "shell" | "sh" | "bash" | "zsh" | "console" | "fish" => Some("bash"), "json" | "jsonc" => Some("json"), "toml" => Some("toml"), "yaml" | "yml" => Some("yaml"),
+        "go" | "golang" => Some("go"), "c" => Some("c"), "cpp" | "c++" => Some("cpp"), "html" | "xml" | "svg" => Some("html"), "css" | "scss" => Some("css"),
+        "markdown" | "md" => Some("markdown"), "diff" | "patch" => Some("diff"),
+        e => lang_of(&format!("x.{e}")),
+    }
+}
+
+// the whole text with its colour runs, for one selectable block (code blocks, tool bodies)
+pub fn joined(text: &str, lang: Option<&str>, cx: &App) -> (SharedString, Runs) {
+    let ls = lines(text, lang, cx);
+    let mut out = String::with_capacity(text.len());
+    let mut runs = vec![];
+    for (i, l) in ls.iter().enumerate() {
+        if i > 0 { out.push('\n'); }
+        let at = out.len();
+        out.push_str(&l.text);
+        runs.extend(l.runs.iter().map(|(r, s)| (r.start + at..r.end + at, *s)));
+    }
+    (out.into(), runs)
 }

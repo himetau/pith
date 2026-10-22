@@ -42,8 +42,8 @@ impl Render for Dock {
         let todos = todo_strip(&self.tab, self.todos_open, move |_, _, cx| { let _ = weak.update(cx, |d, cx| { d.todos_open = !d.todos_open; cx.notify(); }); }, cx);
         let (above, below) = widgets(&self.tab, cx);
         h_flex().w_full().justify_center().child(
+            // the live line itself is the transcript's last row (chat.rs live_line), as in the webview
             v_flex().w_full().max_w(u(DOCK_W)).px(u(28.)).pt(u(4.)).pb(u(14.))
-                .child(self.working.clone())
                 .children(todos)
                 .children(queue(&self.tab, cx))
                 .children(above)
@@ -97,13 +97,6 @@ pub fn dur(ms: u64) -> String {
     if m < 60 { format!("{m}m{:02}s", (s % 60.).round() as u64) } else { format!("{}h{:02}m", m / 60, m % 60) }
 }
 
-// the part of a tool's args that says what it's doing, on one line (tools.rs uses it too)
-pub fn gist(a: &serde_json::Value) -> String {
-    let v = ["command", "path", "file_path", "pattern", "url", "query", "task", "action", "prompt", "question"].iter().find_map(|k| a[*k].as_str());
-    let s = v.map(String::from).unwrap_or_default();
-    let first = s.lines().next().unwrap_or("").trim();
-    if first.chars().count() > 80 { format!("{}…", first.chars().take(79).collect::<String>()) } else { first.to_string() }
-}
 
 fn since(t: Instant) -> String { dur(t.elapsed().as_millis() as u64) }
 
