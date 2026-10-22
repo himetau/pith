@@ -5,7 +5,7 @@
 //   {"move": [x, y]}              the pointer, for hover states
 //   {"scroll": [x, y, dy]}        a wheel scroll, dy in pixels (negative scrolls up)
 //   {"open": "<session file>"}    open a session
-//   {"view": "home|settings"}     switch page
+//   {"view": "home|settings|usage|agents|images"}  switch page
 //   {"dump": true}                the app's state as json
 //   {"resize": [w, h]}
 use crate::state::app::{Pith, View};
@@ -65,7 +65,7 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
     } else if let Some(f) = cmd["open"].as_str() {
         app.update(cx, |a, cx| a.open(f, cx));
     } else if let Some(v) = cmd["view"].as_str() {
-        let v = match v { "settings" => View::Settings, "chat" => View::Chat, _ => View::Home };
+        let v = match v { "settings" => View::Settings, "usage" => View::Usage, "agents" => View::Agents, "images" => View::Images, "chat" => View::Chat, _ => View::Home };
         app.update(cx, |a, cx| a.show(v, cx));
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));

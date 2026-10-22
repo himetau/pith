@@ -3,6 +3,7 @@ pub mod chat;
 pub mod composer;
 pub mod home;
 pub mod images;
+pub mod page;
 pub mod panes;
 pub mod picker;
 pub mod settings;
