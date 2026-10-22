@@ -96,6 +96,7 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
         t.shadow = true;
         if let Some(f) = &ui_font { t.font_family = f.clone().into(); }
         if let Some(f) = &mono { t.mono_font_family = f.clone().into(); }
+        t.highlight_theme = syntax(dark, a);
     });
 }
 
@@ -110,4 +111,35 @@ pub fn pal(cx: &App) -> Pal {
     } else {
         Pal { raised: g(1.), mid: g(0.32), dim: g(0.52), hairline: g(0.9), green: hsla(140. / 360., 0.55, 0.35, 1.), red: hsla(0., 0.65, 0.48, 1.), gold: hsla(32. / 360., 0.85, 0.42, 1.), code_bg: g(0.965) }
     }
+}
+
+// code colours for tree-sitter: muted hues that sit on the grey surfaces, the accent for functions.
+// built once per mode and accent, code blocks keep their highlights only while this Arc stays the same
+pub fn syntax(dark: bool, accent: Hsla) -> std::sync::Arc<gpui_kit::component::highlighter::HighlightTheme> {
+    use gpui_kit::component::highlighter::HighlightTheme;
+    thread_local! { static CACHE: std::cell::RefCell<Option<(bool, Hsla, std::sync::Arc<HighlightTheme>)>> = const { std::cell::RefCell::new(None) }; }
+    if let Some(t) = CACHE.with(|c| c.borrow().as_ref().filter(|(d, a, _)| *d == dark && *a == accent).map(|(_, _, t)| t.clone())) { return t; }
+    // same hues both ways, lighter and softer on dark, deeper on light
+    let c = |h: f32, s: f32| if dark { hsla(h / 360., s, 0.72, 1.) } else { hsla(h / 360., (s + 0.15).min(1.), 0.38, 1.) };
+    let (kw, string, num, ty, tag, attr, esc) = (c(286., 0.5), c(95., 0.36), c(28., 0.7), c(180., 0.38), c(355., 0.58), c(38., 0.6), c(170., 0.45));
+    let func = if dark { with_l(accent, accent.l.max(0.7)) } else { with_l(accent, accent.l.min(0.42)) };
+    let (fg, punct, comment) = if dark { (g(0.88), g(0.62), g(0.5)) } else { (g(0.15), g(0.42), g(0.55)) };
+    let st = |c: Hsla| serde_json::json!({ "color": c });
+    let syntax = serde_json::json!({
+        "attribute": st(attr), "boolean": st(num), "comment": { "color": comment, "font_style": "italic" }, "comment.doc": { "color": comment, "font_style": "italic" },
+        "constant": st(num), "constructor": st(ty), "embedded": st(fg), "emphasis": { "font_style": "italic" }, "emphasis.strong": { "font_weight": 700 },
+        "enum": st(ty), "function": st(func), "keyword": st(kw), "label": st(attr), "link_text": st(func), "link_uri": st(esc), "number": st(num),
+        "operator": st(punct), "preproc": st(kw), "property": st(fg), "punctuation": st(punct), "punctuation.bracket": st(punct),
+        "punctuation.delimiter": st(punct), "punctuation.list_marker": st(punct), "punctuation.special": st(kw), "string": st(string),
+        "string.escape": st(esc), "string.regex": st(esc), "string.special": st(esc), "string.special.symbol": st(esc), "tag": st(tag),
+        "tag.doctype": st(kw), "text.literal": st(string), "title": { "color": fg, "font_weight": 700 }, "type": st(ty), "variable": st(fg),
+        "variable.special": st(tag), "variant": st(ty),
+    });
+    let theme = serde_json::json!({ "name": "pith", "appearance": if dark { "dark" } else { "light" }, "style": { "syntax": syntax } });
+    let t = match serde_json::from_value::<HighlightTheme>(theme) {
+        Ok(t) => std::sync::Arc::new(t),
+        Err(e) => { eprintln!("pith: syntax theme didn't parse, using the default: {e}"); if dark { HighlightTheme::default_dark() } else { HighlightTheme::default_light() } }
+    };
+    CACHE.with(|c| *c.borrow_mut() = Some((dark, accent, t.clone())));
+    t
 }

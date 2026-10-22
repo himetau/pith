@@ -694,6 +694,21 @@ impl Tab {
         }).detach();
     }
 
+    // takes one queued message back into the composer. pi can only clear the whole queue, so the rest go back in order
+    pub fn unqueue(&mut self, text: String, cx: &mut Context<Self>) {
+        let clear = self.cmd(json!({ "type": "clear_queue" }));
+        let p = self.proc.clone();
+        cx.spawn(async move |this, cx| {
+            let q = clear.await;
+            if q["success"] != true { return; }
+            if let Some(p) = p {
+                for m in strings(&q["data"]["steering"]).into_iter().filter(|m| *m != text) { p.send(json!({ "type": "steer", "message": m })).await; }
+                for m in strings(&q["data"]["followUp"]).into_iter().filter(|m| *m != text) { p.send(json!({ "type": "follow_up", "message": m })).await; }
+            }
+            let _ = this.update(cx, |_, cx| cx.emit(TabEvent::Draft(text)));
+        }).detach();
+    }
+
     pub fn bash(&mut self, command: String, exclude: bool, cx: &mut Context<Self>) {
         let ready = self.ensure(cx);
         cx.spawn(async move |this, cx| {
