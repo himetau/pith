@@ -329,7 +329,7 @@ impl Render for WebPane {
         let hover = if self.pick { self.hover.clone() } else { None };
         let pink: Hsla = rgb(0xff00cc).into();
         let page = div().id("web-page").relative().overflow_hidden().w(px(pw.max(0.))).h(px(ph.max(0.))).bg(p.surface_low)
-            .child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().size_full())
+            .child(canvas(move |b, _, _| bounds.set(b), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
             .when_some(shot, |d, s| d.child(img(s).absolute().top_0().left_0().object_fit(ObjectFit::None)))
             .when_some(hover, |d, (b, sel)| d
                 .child(div().absolute().left(b.origin.x).top(b.origin.y).w(b.size.width).h(b.size.height).border(px(2.)).border_color(pink).bg(pink.opacity(0.08)))
@@ -350,11 +350,11 @@ impl Render for WebPane {
                 .into_any_element()
         } else {
             div().flex_1().min_h_0().relative().overflow_hidden().bg(p.surface_low)
-                .child(canvas(move |b, _, _| stage.set(b), |_, _, _, _| {}).absolute().size_full())
+                .child(canvas(move |b, _, _| stage.set(b), |_, _, _, _| {}).absolute().top_0().left_0().size_full())
                 // .pv-stage.framed: stripes of the window ground on the low surface
-                .when(framed, |d| d.child(div().absolute().size_full().bg(pattern_slash(p.bg, 8., 8.))))
+                .when(framed, |d| d.child(div().absolute().top_0().left_0().size_full().bg(pattern_slash(p.bg, 8., 8.))))
                 .child(div().size_full().flex().justify_center().pt(px(pad)).child(page))
-                .when(driving, |d| d.child(div().absolute().size_full().border(u(2.)).border_color(p.primary)))
+                .when(driving, |d| d.child(div().absolute().top_0().left_0().size_full().border(u(2.)).border_color(p.primary)))
                 .into_any_element()
         };
         v_flex().id("web-pane").size_full().track_focus(&self.focus)

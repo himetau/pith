@@ -217,7 +217,7 @@ impl Files {
         }).track_scroll(&self.scroll).with_width_from_item(Some(self.longest)).with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
             .size_full().pt(u(12.)).pb(u(40.)).text_size(u(fs)).line_height(relative(1.6)).font_family(g.mono.clone());
         div().flex_1().min_h_0().relative()
-            .child(canvas(move |b, window, _| if (b.size.width - wcell.get()).abs() > px(0.5) { wcell.set(b.size.width); window.refresh(); }, |_, _, _, _| {}).absolute().size_full())
+            .child(canvas(move |b, window, _| if (b.size.width - wcell.get()).abs() > px(0.5) { wcell.set(b.size.width); window.refresh(); }, |_, _, _, _| {}).absolute().top_0().left_0().size_full())
             .child(list).into_any_element()
     }
 }
