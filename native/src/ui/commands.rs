@@ -125,10 +125,14 @@ pub fn run_builtin(tab: Option<Entity<Tab>>, text: &str, window: &mut Window, cx
         "name" => if arg.is_empty() { app.update(cx, |a, cx| a.toast(Level::Info, "/name needs a title", cx)) } else { tab.update(cx, |t, cx| t.rename(arg, cx)) },
         "clone" => tab.update(cx, |t, cx| t.clone_session(cx)),
         // saved next to the session, then opened
-        "export" => tab.update(cx, |t, cx| t.export_html(cx, |p, cx| {
-            Pith::global(cx).update(cx, |a, cx| a.toast(Level::Info, format!("saved {p}"), cx));
-            cx.open_with_system(std::path::Path::new(&p));
-        })),
+        "export" => tab.update(cx, |t, cx| {
+            // pi answers with a path relative to the session's folder
+            let cwd = std::path::PathBuf::from(&t.cwd);
+            t.export_html(cx, move |p, cx| {
+                Pith::global(cx).update(cx, |a, cx| a.toast(Level::Info, format!("saved {p}"), cx));
+                cx.open_with_system(&cwd.join(&p));
+            })
+        }),
         "copy" => match last_reply(tab.read(cx)) {
             Some(t) => { cx.write_to_clipboard(ClipboardItem::new_string(t)); app.update(cx, |a, cx| a.toast(Level::Info, "copied", cx)); }
             None => {}
