@@ -22,8 +22,12 @@ fn g(l: f32) -> Hsla { hsla(240. / 360., 0.04, l, 1.) }
 fn with_l(c: Hsla, l: f32) -> Hsla { hsla(c.h, c.s, l, 1.) }
 
 pub fn apply(window: Option<&mut Window>, cx: &mut App) {
-    Theme::sync_system_appearance(window, cx);
     let settings = sys::load_settings();
+    match settings["appearance"].as_str() {
+        Some("light") => Theme::change(ThemeMode::Light, window, cx),
+        Some("dark") => Theme::change(ThemeMode::Dark, window, cx),
+        _ => Theme::sync_system_appearance(window, cx),
+    }
     let ui_font = settings["uiFont"].as_str().filter(|s| !s.is_empty()).map(String::from);
     let mono = settings["font"].as_str().filter(|s| !s.is_empty()).map(String::from)
         .or_else(|| sys::terminal_font()["family"].as_str().map(String::from));
@@ -103,6 +107,18 @@ pub fn apply(window: Option<&mut Window>, cx: &mut App) {
         c.tab_active = bg;
         c.tab_active_foreground = fg;
         c.tab_foreground = mid;
+        // the kit's diff and status colours, toned to sit with the greys
+        let (green, red, gold) = if dark { (hsla(140. / 360., 0.5, 0.6, 1.), hsla(0., 0.75, 0.66, 1.), hsla(38. / 360., 0.8, 0.62, 1.)) }
+            else { (hsla(140. / 360., 0.55, 0.35, 1.), hsla(0., 0.65, 0.48, 1.), hsla(32. / 360., 0.85, 0.42, 1.)) };
+        c.green = green;
+        c.green_light = green.opacity(if dark { 0.14 } else { 0.12 });
+        c.red = red;
+        c.red_light = red.opacity(if dark { 0.14 } else { 0.1 });
+        c.yellow = gold;
+        c.yellow_light = gold.opacity(0.14);
+        c.success = green;
+        c.danger = red;
+        c.warning = gold;
         c.description_list_label = hover;
         c.description_list_label_foreground = mid;
         t.font_size = px(size);

@@ -207,7 +207,13 @@ impl Render for SettingsPage {
                 .on_change(move |v: &bool, _, cx| a2.update(cx, |a, cx| a.save_settings(json!({ "notify": *v }), cx))), cx),
         ], cx);
 
-        let mut look = vec![self.field("uiFont", cx), self.field("font", cx), self.field("textSize", cx)];
+        let ai = match s["appearance"].as_str() { Some("light") => 1, Some("dark") => 2, _ => 0 };
+        let a3 = app.clone();
+        let looks = page::segmented("appearance", &["System", "Light", "Dark"], ai, move |i, window, cx| {
+            a3.update(cx, |a, cx| a.save_settings(json!({ "appearance": (["system", "light", "dark"][i]) }), cx));
+            super::theme::apply(Some(window), cx);
+        }, cx);
+        let mut look = vec![row("Appearance", "Light or dark, or whatever the system is set to", looks, cx), self.field("uiFont", cx), self.field("font", cx), self.field("textSize", cx)];
         if cfg!(target_os = "linux") {
             let theme = sys::theme_file();
             let found = theme.exists();
