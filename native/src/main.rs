@@ -9,7 +9,7 @@ use gpui_kit::*;
 
 fn main() {
     let t0 = std::time::Instant::now();
-    gpui_kit::application().with_assets(gpui_kit::assets::AllAssets).run(move |cx| {
+    gpui_kit::application().with_assets(ui::icons::Assets).run(move |cx| {
         gpui_kit::init(cx);
         ui::theme::apply(None, cx);
         ui::workspace::bind_keys(cx);

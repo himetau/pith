@@ -1,7 +1,7 @@
 // dev only: PITH_CTL=<dir> lets scripts drive the app. drop {"...": ...} as <id>.cmd.json, the answer lands in <id>.out.json.
 //   {"keys": "ctrl-k"}            a keystroke, as if typed
 //   {"type": "hello"}             text into whatever has focus
-//   {"click": [x, y]}             left click at window coordinates, "count": 2 for a double click
+//   {"click": [x, y]}             left click at window coordinates, "count": 2 for a double click, "button": "right"
 //   {"move": [x, y]}              the pointer, for hover states
 //   {"drag": [x0, y0, x1, y1]}    press at one point, move to the other in steps, release
 //   {"scroll": [x, y, dy]}        a wheel scroll, dy in pixels (negative scrolls up)
@@ -56,10 +56,11 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
     } else if let Some(c) = cmd["click"].as_array() {
         let pos = point(pt(&cmd["click"], 0), pt(&cmd["click"], 1));
         let _ = c;
+        let button = if cmd["button"] == "right" { MouseButton::Right } else { MouseButton::Left };
         window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: pos, pressed_button: None, modifiers: Modifiers::default() }), cx);
         for n in 1..=cmd["count"].as_u64().unwrap_or(1).max(1) as usize {
-            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: pos, modifiers: Modifiers::default(), click_count: n, first_mouse: false }), cx);
-            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: pos, modifiers: Modifiers::default(), click_count: n }), cx);
+            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button, position: pos, modifiers: Modifiers::default(), click_count: n, first_mouse: false }), cx);
+            window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: pos, modifiers: Modifiers::default(), click_count: n }), cx);
         }
     } else if cmd["drag"].is_array() {
         let (a, b) = (point(pt(&cmd["drag"], 0), pt(&cmd["drag"], 1)), point(pt(&cmd["drag"], 2), pt(&cmd["drag"], 3)));

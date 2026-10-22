@@ -283,6 +283,30 @@ impl Pith {
         }).detach();
     }
 
+    // home, set up for a chat (ctrl+n) or a design in the design folder (ctrl+shift+n)
+    pub fn new_home(&mut self, kind: Kind, cx: &mut Context<Self>) {
+        self.home_kind = kind;
+        if kind == Kind::Design { if let Some(d) = self.settings["designDir"].as_str().filter(|d| !d.is_empty()) { self.home_cwd = d.to_string(); } }
+        self.show(View::Home, cx);
+    }
+
+    pub fn pinned(&self) -> Vec<String> { super::tab::strings(&self.settings["pinned"]) }
+    pub fn toggle_pin(&mut self, file: &str, cx: &mut Context<Self>) {
+        let mut p = self.pinned();
+        if p.iter().any(|f| f == file) { p.retain(|f| f != file); } else { p.push(file.to_string()); }
+        self.save_settings(json!({ "pinned": p }), cx);
+    }
+
+    // into the system trash, never deleted outright. its tab goes first
+    pub fn trash(&mut self, file: &str, cx: &mut Context<Self>) {
+        if let Some(t) = self.tabs.iter().find(|t| t.read(cx).file.as_deref() == Some(file)).cloned() { self.close(&t, cx); }
+        let f = file.to_string();
+        cx.spawn(async move |this, cx| {
+            let r = cx.background_spawn(async move { trash::delete(&f).map_err(|e| e.to_string()) }).await;
+            let _ = this.update(cx, |a, cx| { if let Err(e) = r { a.toast(Level::Error, format!("couldn't trash it: {e}"), cx); } a.refresh_sessions(cx); });
+        }).detach();
+    }
+
     pub fn stop_all(&mut self, cx: &mut Context<Self>) {
         for t in self.tabs.clone() { t.update(cx, |t, cx| t.stop(cx)); }
     }
