@@ -26,6 +26,13 @@ libc = "0.2"
 anyhow = "1"
 futures = "0.3"
 
+# a nix build on macos has no metal compiler to run at build time, so the shaders compile when pith starts instead
+[features]
+runtime-shaders = ["gpui-pre-platform/runtime_shaders"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-pre-platform = "=0.3.9"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

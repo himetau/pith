@@ -58,8 +58,53 @@
           mainProgram = "pith";
         };
       };
+      # the native build: gpui draws the ui, no webview. gpui dlopens vulkan, wayland and xkbcommon at runtime,
+      # so they go on the rpath. on macos the metal shaders compile at startup, a nix build has no metal compiler
+      mkNative = pkgs: with pkgs; let
+        path = lib.makeBinPath [ pi-coding-agent git ];
+        runtimeLibs = [ vulkan-loader wayland libxkbcommon xorg.libX11 xorg.libxcb xorg.libXcursor xorg.libXi libGL ];
+      in rustPlatform.buildRustPackage {
+        pname = "pith";
+        version = (lib.importTOML ./native/Cargo.toml).package.version;
+
+        src = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./ext ./prompts ./packaging/pith.desktop ./packaging/icon.png
+            (lib.fileset.difference ./native (lib.fileset.maybeMissing ./native/target))
+          ];
+        };
+
+        cargoLock.lockFile = ./native/Cargo.lock;
+        cargoRoot = "native";
+        buildAndTestSubdir = "native";
+        buildFeatures = lib.optionals stdenv.hostPlatform.isDarwin [ "runtime-shaders" ];
+        doCheck = false;
+
+        nativeBuildInputs = [ pkg-config makeBinaryWrapper ] ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
+        buildInputs = lib.optionals stdenv.hostPlatform.isLinux ([ fontconfig freetype stdenv.cc.cc.lib ] ++ runtimeLibs)
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [ apple-sdk_15 ];
+        runtimeDependencies = lib.optionals stdenv.hostPlatform.isLinux runtimeLibs;
+
+        # ext/ and prompts/ go in lib/pith beside bin/, which pith checks for
+        postInstall = ''
+          mkdir -p $out/lib/pith
+          cp -r ext prompts $out/lib/pith/
+          wrapProgram $out/bin/pith --suffix PATH : ${path}
+        '' + lib.optionalString stdenv.hostPlatform.isLinux ''
+          install -Dm644 packaging/pith.desktop $out/share/applications/pith.desktop
+          install -Dm644 packaging/icon.png $out/share/icons/hicolor/512x512/apps/pith.png
+        '';
+
+        meta = {
+          description = "A desktop for pi: sessions, agents, changes, a terminal and your usage, drawn natively";
+          homepage = "https://github.com/himetau/pith";
+          platforms = systems;
+          mainProgram = "pith";
+        };
+      };
     in {
-      packages = each (pkgs: rec { pith = mkPith pkgs; default = pith; });
+      packages = each (pkgs: rec { pith = mkNative pkgs; pith-tauri = mkPith pkgs; default = pith; });
       devShells = each (pkgs: {
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.pith ];

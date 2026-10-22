@@ -134,6 +134,7 @@ impl Pith {
                 tab.update(cx, |t, cx| {
                     t.on_event(&rec, cx);
                     if background && rec["type"] == "agent_settled" { t.unread = true; }
+                    if rec["type"] == "agent_settled" && rec["aborted"] != true { crate::platform::notify(&t.title(), "Done", cx); }
                 });
             }
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),

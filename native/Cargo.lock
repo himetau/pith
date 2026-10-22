@@ -4674,6 +4674,7 @@ dependencies = [
  "base64 0.22.1",
  "futures",
  "gpui-kit",
+ "gpui-pre-platform",
  "image",
  "libc",
  "notify",
