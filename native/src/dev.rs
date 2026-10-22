@@ -8,6 +8,7 @@
 //   {"open": "<session file>"}    open a session
 //   {"view": "home|settings|usage|agents|images"}  switch page
 //   {"dump": true}                the app's state as json
+//   {"lightbox": "<png>", "caption": "...", "bytes": true}   the image viewer, on a path or decoded bytes
 //   {"resize": [w, h]}
 //   {"drop": ["<path>", ...], "at": [x, y]}   files dragged onto the window, then {"release": [x, y]} drops them
 //   {"event": {...}}              a pi event into the open session
@@ -108,6 +109,9 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         // as if pi had sent it to the open session, e.g. an extension_ui_request
         let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
         t.update(cx, |t, cx| t.on_event(&cmd["event"], cx));
+    } else if let Some(p) = cmd["lightbox"].as_str() {
+        let src = if cmd["bytes"] == true { crate::ui::lightbox::Src::Image(std::sync::Arc::new(Image::from_bytes(ImageFormat::Png, std::fs::read(p).unwrap_or_default()))) } else { crate::ui::lightbox::Src::Path(p.into()) };
+        crate::ui::lightbox::open(src, cmd["caption"].as_str().map(String::from), window, cx);
     } else if cmd["resize"].is_array() {
         window.resize(size(pt(&cmd["resize"], 0), pt(&cmd["resize"], 1)));
     } else if let Some(url) = cmd["webtest"]["url"].as_str() {

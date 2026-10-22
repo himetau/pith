@@ -1,5 +1,3 @@
-// used by every image in the transcript, the tools and the files pane, so unused until those call it
-#![allow(dead_code)]
 // one image over everything (overlay.ts lightbox, shell.css .lb): click it or the dark around it, or esc, to close.
 // a bar under it with the caption, copy and close. anything that shows an image opens it here
 use super::icons::ic;

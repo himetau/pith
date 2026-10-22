@@ -361,17 +361,21 @@ impl Workspace {
         let (text, hover, high) = (p.text, p.hover, p.high);
         let cwd = r.cwd.clone();
         let click = r.clone();
-        div().id(id).flex().items_center().gap(u(4.)).pl(u(6.)).pr(u(8.)).py(u(4.)).rounded(u(g.r2)).cursor_pointer()
+        let title = div().flex_1().min_w_0().flex().overflow_hidden().whitespace_nowrap()
+            .when(design, |d| d.child(div().flex_none().text_color(p.tertiary).child("◇ ")))
+            .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(r.title.clone()));
+        let (ago_sz, ago_txt, dim) = (em(cx, 0.78), ago(r.updated), p.dim);
+        let ago_el = move || div().flex_none().text_size(ago_sz).text_color(dim).child(ago_txt.clone());
+        // the grid: glyph, title, ago; searching puts the folder under the title and ago beside it, a row down
+        let line = |d: Div| d.flex().items_center().gap(u(4.));
+        div().id(id).flex().flex_col().gap(u(4.)).pl(u(6.)).pr(u(8.)).py(u(4.)).rounded(u(g.r2)).cursor_pointer()
             .text_color(if on { p.text } else { p.mid })
             .when(on, |d| d.bg(high)).when(!on, |d| d.hover(move |s| s.bg(hover).text_color(text)))
             .tip(cwd, cx)
-            .child(div().flex_none().w(u(16.)).flex().justify_center().text_color(p.dim).child(glyph))
-            .child(div().flex_1().min_w_0().flex().flex_col()
-                .child(div().overflow_hidden().text_ellipsis().whitespace_nowrap()
-                    .when(design, |d| d.child(div().flex_none().text_color(p.tertiary).child("◇ ")).flex())
-                    .child(div().min_w_0().overflow_hidden().text_ellipsis().whitespace_nowrap().child(r.title.clone())))
-                .when(with_cwd, |d| d.child(div().text_size(em(cx, 0.8)).text_color(p.dim).overflow_hidden().text_ellipsis().whitespace_nowrap().child(base(&r.cwd)))))
-            .child(div().flex_none().text_size(em(cx, 0.78)).text_color(p.dim).child(ago(r.updated)))
+            .child(line(div()).child(div().flex_none().w(u(16.)).flex().justify_center().text_color(p.dim).child(glyph)).child(title).when(!with_cwd, |d| d.child(ago_el())))
+            .when(with_cwd, |d| d.child(line(div()).child(div().flex_none().w(u(16.)))
+                .child(div().flex_1().min_w_0().text_size(em(cx, 0.8)).text_color(p.dim).overflow_hidden().text_ellipsis().whitespace_nowrap().child(base(&r.cwd)))
+                .child(ago_el())))
             .on_click(move |_, _, cx| { let a = Pith::global(cx); a.update(cx, |a, cx| match (&click.tab, &click.file) { (Some(t), _) => a.focus(t.clone(), cx), (None, Some(f)) => a.open(f, cx), _ => {} }); })
             .on_mouse_down(MouseButton::Right, move |e, _, cx| row_menu(&row, e.position, cx))
             .into_any_element()
