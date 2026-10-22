@@ -1,0 +1,12 @@
+pub mod agents;
+pub mod chat;
+pub mod composer;
+pub mod home;
+pub mod images;
+pub mod panes;
+pub mod picker;
+pub mod settings;
+pub mod theme;
+pub mod tools;
+pub mod usage;
+pub mod workspace;
