@@ -7,7 +7,6 @@ use super::tools::tilde;
 use crate::core::sys;
 use crate::state::app::{Pith, View};
 use crate::state::tab::{How, Level};
-use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -117,7 +116,9 @@ impl AgentsPage {
         let lab = |l: &str, el: AnyElement, cx: &App| div().flex().flex_col().gap(u(4.)).min_w_0().child(div().text_size(em(cx, 0.86)).text_color(p.dim).child(l.to_string())).child(el);
         let focused = self.body.read(cx).focus_handle(cx).is_focused(window);
         let fs = geo(cx).fs;
-        let body = s_box(focused, cx).items_start().child(Textarea::new(&self.body).appearance(false).p_0().h(u(16. * fs * 1.5)).text_size(u(fs)).w_full());
+        let body = s_box(focused, cx).items_start().child(Textarea::new(&self.body).appearance(false).p_0().h(u(16. * fs * 1.5 + 10.)).text_size(u(fs)).line_height(u(fs * 1.5)).w_full()
+            // the kit pads its editor inside; the css textarea only has .s-in's
+            .mx(u(-10.)).mt(u(-8.)).mb(u(-2.)));
         let row2 = |a: AnyElement, b: AnyElement| div().flex().gap(u(10.)).child(div().flex_1().min_w_0().child(a)).child(div().w(u(220.)).flex_none().child(b));
         div().flex().flex_col().gap(u(12.)).min_w_0()
             .child(row2(lab("name", s_in(&self.name, window, cx).into_any_element(), cx).into_any_element(), lab("model", s_in(&self.model, window, cx).into_any_element(), cx).into_any_element()))
@@ -130,7 +131,7 @@ impl AgentsPage {
             .child(div().mt(u(10.)).child(legend_box("summon into the current session",
                 div().pt(u(18.)).px(u(14.)).pb(u(12.)).flex().gap(u(10.)).items_center()
                     .child(div().flex_1().min_w_0().child(s_in(&self.task, window, cx)))
-                    .child(btn("ag-summon", Btn::Plain, false, cx).child(ic(IconName::Users, cx)).child("summon").on_click(cx.listener(|this, _, window, cx| this.summon(window, cx)))), cx)))
+                    .child(btn("ag-summon", Btn::Plain, false, cx).child(ic("agents", cx)).child("summon").on_click(cx.listener(|this, _, window, cx| this.summon(window, cx)))), cx)))
             .into_any_element()
     }
 }
@@ -147,7 +148,7 @@ impl Render for AgentsPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (p, g) = (pal(cx), geo(cx));
         let has_tab = Pith::global(cx).read(cx).active.is_some();
-        let mut actions = vec![btn("ag-new", Btn::Plain, true, cx).child(ic(IconName::Plus, cx)).child("new agent")
+        let mut actions = vec![btn("ag-new", Btn::Plain, true, cx).child(ic("plus", cx)).child("new agent")
             .on_click(cx.listener(|this, _, window, cx| this.fill(&json!({ "tools": TOOLS, "scope": "user" }), window, cx))).into_any_element()];
         if has_tab { actions.push(btn("ag-live", Btn::Ghost, true, cx).child("live view").on_click(|_, _, cx| live_view(cx)).into_any_element()); }
         let sub = format!("{} defined · {} running", self.defs.len(), self.running);
@@ -162,7 +163,7 @@ impl Render for AgentsPage {
                 .border_color(if on { p.line } else { p.line.opacity(0.) }).when(on, |e| e.bg(p.raised)).when(!on, |e| e.hover(move |st| st.bg(hover)))
                 .child(div().flex().gap(u(8.)).items_baseline().text_color(tertiary).child(s("name"))
                     .when(d["scope"] == "project", |e| e.child(div().text_size(em(cx, 0.75)).text_color(p.dim).border(u(1.)).border_color(p.line).rounded(u(3.)).px(u(4.)).child("project"))))
-                .child(div().text_size(em(cx, 0.88)).text_color(p.mid).child(s("description")))
+                .when(!s("description").is_empty(), |e| e.child(div().text_size(em(cx, 0.88)).text_color(p.mid).child(s("description"))))
                 .when(!s("tools").is_empty(), |e| e.child(div().mt(u(2.)).text_size(em(cx, 0.8)).text_color(p.dim).child(s("tools"))))
                 .on_click(cx.listener(move |this, _, window, cx| this.fill(&d2, window, cx)))
         }));

@@ -6,7 +6,6 @@ use super::tools::tilde;
 use crate::core::sessions;
 use crate::state::app::{Pith, View};
 use crate::state::tab::now_ms;
-use gpui_kit::assets::IconName;
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use serde_json::Value;
@@ -411,7 +410,7 @@ impl Render for UsagePage {
         };
         let vw = f32::from(window.viewport_size().width) / g.scale;
         let narrow = vw < 1100.;
-        let reload = btn("us-reload", Btn::Ghost, true, cx).child(ic(IconName::RefreshCw, cx)).child("reload").on_click(cx.listener(|this, _, _, cx| this.load(cx)));
+        let reload = btn("us-reload", Btn::Ghost, true, cx).child(ic("refresh", cx)).child("reload").on_click(cx.listener(|this, _, _, cx| this.load(cx)));
         let summary: SharedString = format!("{} sessions · {} model calls on record", r.sessions.len(), group_digits(r.calls as u64)).into();
         let b = Pith::global(cx).read(cx).settings["budget"].clone();
         let budget = |k: &str| b[k].as_f64().unwrap_or(0.);

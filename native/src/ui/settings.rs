@@ -6,8 +6,8 @@ use super::tools::tilde;
 use crate::core::sys;
 use crate::state::app::Pith;
 use crate::state::tab::Mode;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::assets::IconName;
 use gpui_kit::component::Icon;
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -139,7 +139,7 @@ impl SettingsPage {
             Kind::Text => s_in(input, window, cx).into_any_element(),
             Kind::Dir => div().flex().gap(u(4.)).w_full().items_center()
                 .child(div().flex_1().min_w_0().child(s_in(input, window, cx)))
-                .child(pb(SharedString::from(format!("pick-{key}")), IconName::Folder, cx).on_click(cx.listener(move |this, _, window, cx| this.pick_dir(key, window, cx))))
+                .child(pb(SharedString::from(format!("pick-{key}")), "folder", cx).on_click(cx.listener(move |this, _, window, cx| this.pick_dir(key, window, cx))))
                 .into_any_element(),
             Kind::Num(..) | Kind::Money => {
                 let (text, hover) = (p.text, p.hover);
@@ -177,7 +177,7 @@ fn field(label: &str, hint: &str, first: bool, ctl: impl IntoElement, cx: &App) 
 }
 
 // .pb: a small icon button beside a field
-fn pb(id: impl Into<ElementId>, icon: IconName, cx: &App) -> Stateful<Div> {
+fn pb(id: impl Into<ElementId>, icon: &str, cx: &App) -> Stateful<Div> {
     let p = pal(cx);
     let (text, hover) = (p.text, p.hover);
     div().id(id).flex().flex_none().items_center().h(u(26.)).px(u(6.)).rounded(u(5.)).text_color(p.dim).cursor_pointer()
@@ -258,7 +258,7 @@ impl Render for SettingsPage {
         let keys = group("keys", vec![
             div().grid().grid_cols(2).gap_y(u(4.)).gap_x(u(20.)).pt(u(4.)).pb(u(8.))
                 .children(KEYS.iter().map(|(k, v)| div().flex().gap(u(10.)).items_center().text_size(em(cx, 0.9))
-                    .child(kbd(*k, cx).min_w(u(11. * ch + 10.)).flex().justify_center()).child(div().child(*v))))
+                    .child(kbd(*k, cx).min_w(u(11. * ch)).flex().justify_center()).child(div().child(*v))))
                 .into_any_element(),
         ], cx);
 

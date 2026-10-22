@@ -9,7 +9,6 @@ use crate::core::{imagegen, sessions, sys};
 use crate::state::app::{Pith, View};
 use crate::state::tab::{Level, TabEvent};
 use base64::Engine;
-use gpui_kit::assets::IconName;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
@@ -172,19 +171,21 @@ impl ImagesPage {
         let model = format!("{} / {}", s["imageProvider"].as_str().unwrap_or(""), s["imageModel"].as_str().unwrap_or(""));
         let this = cx.entity().downgrade();
         let _ = window;
-        let ta = Textarea::new(&self.prompt).appearance(false).p_0().text_size(u(fs)).w_full()
+        let ta = Textarea::new(&self.prompt).appearance(false).p_0().text_size(u(fs)).line_height(u(fs * 1.55)).w_full()
+            // the kit pads its editor inside; .im-prompt has none
+            .mx(u(-10.)).mt(u(-8.)).mb(u(-2.))
             .on_paste(move |item, _, cx| this.update(cx, |t, cx| t.paste(item, cx)).unwrap_or(false));
         let refs = div().flex().flex_wrap().gap(u(8.)).when(!self.refs.is_empty(), |d| d.mt(u(10.)))
             .children(self.refs.iter().enumerate().map(|(i, r)| div().flex().items_start().gap(u(6.)).rounded(u(5.))
                 .child(img(r.pic.clone()).h(u(56.)).rounded(u(5.)).border(u(1.)).border_color(p.line))
                 .child(div().id(("im-ref-x", i)).flex().items_center().justify_center().size(u(18.)).rounded(u(4.)).bg(p.raised).text_color(p.dim).cursor_pointer()
-                    .child(page::ic_in(IconName::X, 1., cx))
+                    .child(page::icon("close").size(em(cx, 1.)))
                     .on_click(cx.listener(move |this, _, _, cx| { if i < this.refs.len() { this.refs.remove(i); } cx.notify(); })))));
         let bar = div().flex().items_center().gap(u(10.)).mt(u(10.))
-            .child(btn("im-ref", Btn::Ghost, true, cx).child(ic(IconName::Paperclip, cx)).child("reference image").on_click(cx.listener(|this, _, window, cx| this.add_ref(window, cx))))
+            .child(btn("im-ref", Btn::Ghost, true, cx).child(ic("clip", cx)).child("reference image").on_click(cx.listener(|this, _, window, cx| this.add_ref(window, cx))))
             .child(div().min_w_0().truncate().text_size(em(cx, 0.84)).text_color(p.dim).child(model))
             .child(div().flex_1())
-            .child(btn("im-gen", Btn::Pri, false, cx).child(ic(IconName::Sparkles, cx)).child("generate").on_click(cx.listener(|this, _, window, cx| this.generate(window, cx))));
+            .child(btn("im-gen", Btn::Pri, false, cx).child(ic("sparkle", cx)).child("generate").on_click(cx.listener(|this, _, window, cx| this.generate(window, cx))));
         wide().mb(u(22.)).child(legend_box("generate", div().pt(u(18.)).px(u(14.)).pb(u(10.)).child(ta).child(refs).child(bar), cx))
     }
 
@@ -207,11 +208,11 @@ impl ImagesPage {
                 .child(div().flex().items_center().gap(u(2.)).mt(u(4.))
                     .child(div().text_color(p.dim).child(ago(it.mtime)))
                     .child(div().flex_1())
-                    .child(ia(("im-use", i), IconName::Paperclip, cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("use in the current chat").build(w, cx))
+                    .child(ia(("im-use", i), "clip", cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("use in the current chat").build(w, cx))
                         .on_click(cx.listener(move |this, _, _, cx| this.use_in_chat(f2.clone(), cx))))
-                    .child(ia(("im-asref", i), IconName::Pencil, cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("use as reference").build(w, cx))
+                    .child(ia(("im-asref", i), "edit", cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("use as reference").build(w, cx))
                         .on_click(cx.listener(move |this, _, window, cx| this.use_as_ref(f3.clone(), window, cx))))
-                    .child(ia(("im-show", i), IconName::Folder, cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("show in folder").build(w, cx))
+                    .child(ia(("im-show", i), "folder", cx).tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("show in folder").build(w, cx))
                         .on_click(move |_, _, cx| cx.reveal_path(&f4)))))
             .into_any_element()
     }
@@ -248,7 +249,7 @@ impl Render for ImagesPage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (p, g) = (pal(cx), geo(cx));
         let dir = sys::images_dir();
-        let folder = btn("im-folder", Btn::Ghost, true, cx).child(ic(IconName::Folder, cx)).child("folder")
+        let folder = btn("im-folder", Btn::Ghost, true, cx).child(ic("folder", cx)).child("folder")
             .on_click(move |_, _, cx| { let _ = std::fs::create_dir_all(&dir); cx.open_with_system(&dir); });
 
         // repeat(auto-fill, minmax(220px, 1fr)) against the page's width
