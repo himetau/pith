@@ -333,9 +333,9 @@ pub(crate) fn btn(id: impl Into<ElementId>, cx: &App) -> Stateful<Div> {
 pub(crate) fn empty(title: Option<&str>, sub: impl Into<SharedString>, cx: &App) -> Div {
     let p = pal(cx);
     div().flex_1().min_h_0().flex().items_center().justify_center().p(u(30.)).text_color(p.mid)
-        .child(v_flex().gap(u(8.)).items_center().text_center()
+        .child(v_flex().w_full().gap(u(8.)).items_center().text_center()
             .when_some(title.map(String::from), |d, t| d.child(div().text_color(p.text).child(t)))
-            .child(div().text_color(p.dim).child(sub.into())))
+            .child(div().w_full().text_color(p.dim).child(sub.into())))
 }
 // the .url field around an Input: raised, the primary border while it has focus
 pub(crate) fn url_box(focused: bool, raised: bool, cx: &App) -> Div {

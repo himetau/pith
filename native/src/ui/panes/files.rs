@@ -44,6 +44,7 @@ pub struct Files {
     hl: Cache,
     version: u64,
     longest: usize,
+    code_w: std::rc::Rc<std::cell::Cell<Pixels>>,
     scroll: UniformListScrollHandle,
     gen: u64,
     _subs: Vec<Subscription>,
@@ -61,7 +62,7 @@ impl Files {
         })];
         Files {
             input, cwd: String::new(), tab: None, all: Arc::new(vec![]), all_cwd: String::new(), listing: false, query: String::new(), finding: false, hits: vec![], hit: 0,
-            open: HashMap::new(), shown: None, view: View::Empty, hl: Cache::default(), version: 0, longest: 0, scroll: UniformListScrollHandle::new(), gen: 0, _subs: subs,
+            open: HashMap::new(), shown: None, view: View::Empty, hl: Cache::default(), version: 0, longest: 0, code_w: Default::default(), scroll: UniformListScrollHandle::new(), gen: 0, _subs: subs,
         }
     }
 
@@ -203,17 +204,21 @@ impl Files {
         let digits = n.to_string().len().max(1);
         let fs = g.fs * 0.88;
         let (gold, dn) = (p.gold, dn_color(cx));
-        uniform_list("f-code", n, move |range, _, _| {
+        // rows are as wide as the longest line, but never narrower than the pane, or the mark stops short
+        let (wcell, w) = (self.code_w.clone(), self.code_w.get());
+        let list = uniform_list("f-code", n, move |range, _, _| {
             range.map(|i| {
                 let on = line == Some(i + 1);
-                h_flex().id(i).whitespace_nowrap().pr(u(12.)).text_size(u(fs)).line_height(u(fs * 1.6))
+                h_flex().id(i).min_w(w).whitespace_nowrap().pr(u(12.)).text_size(u(fs)).line_height(u(fs * 1.6))
                     .when(on, |d| d.bg(fade(gold, 0.16)).border_l(u(2.)).border_color(gold))
                     .child(div().w(u(fs * 0.6 * digits as f32 + 14.)).flex_none().flex().justify_end().pr(u(14.)).text_color(dn).when(on, |d| d.ml(u(-2.))).child((i + 1).to_string()))
                     .child(code::styled(&lines[i]))
             }).collect()
         }).track_scroll(&self.scroll).with_width_from_item(Some(self.longest)).with_horizontal_sizing_behavior(ListHorizontalSizingBehavior::Unconstrained)
-            .flex_1().min_h_0().pt(u(12.)).pb(u(40.)).text_size(u(fs)).line_height(relative(1.6)).font_family(g.mono.clone())
-            .into_any_element()
+            .size_full().pt(u(12.)).pb(u(40.)).text_size(u(fs)).line_height(relative(1.6)).font_family(g.mono.clone());
+        div().flex_1().min_h_0().relative()
+            .child(canvas(move |b, window, _| if (b.size.width - wcell.get()).abs() > px(0.5) { wcell.set(b.size.width); window.refresh(); }, |_, _, _, _| {}).absolute().size_full())
+            .child(list).into_any_element()
     }
 }
 

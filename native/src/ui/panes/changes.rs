@@ -242,8 +242,9 @@ impl Render for Changes {
                 let diff: AnyElement = if self.cur.is_none() { div().flex_1().into_any_element() }
                     else if self.lines.is_empty() && !self.busy { div().flex_1().child(div().p(u(14.)).text_color(p.dim).child("binary file, or no textual change")).into_any_element() }
                     else {
-                        list(self.list.clone(), cx.processor(move |this, ix, _, cx| this.row(ix, cw, cx)))
-                            .flex_1().min_h_0().pt(u(6.)).pb(u(20.)).text_size(u(fs)).line_height(relative(1.5)).font_family(g.mono.clone()).into_any_element()
+                        // the list ignores its own padding, so the first and last rows carry .ch-diff's
+                        list(self.list.clone(), cx.processor(move |this, ix, _, cx| { let n = this.lines.len(); div().when(ix == 0, |d| d.pt(u(6.))).when(ix + 1 == n, |d| d.pb(u(20.))).child(this.row(ix, cw, cx)).into_any_element() }))
+                            .flex_1().min_h_0().text_size(u(fs)).line_height(relative(1.5)).font_family(g.mono.clone()).into_any_element()
                     };
                 v_flex().flex_1().min_h_0()
                     .child(div().id("ch-files").flex_none().max_h(relative(0.34)).overflow_y_scroll().p(u(4.)).border_b(u(1.)).border_color(p.rule)
