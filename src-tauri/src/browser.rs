@@ -74,7 +74,7 @@ pub async fn run(app: &AppHandle, tab: &str, a: Value, home: &str) -> Result<Val
             let raw = a["url"].as_str().ok_or("navigate needs a url")?;
             let url = if raw.contains("://") || raw.starts_with("about:") { raw.to_string() } else { format!("https://{raw}") };
             mark_loading(&l);
-            wv.navigate(url.parse::<Url>().map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+            crate::webviews::go(&wv, url.parse::<Url>().map_err(|e| e.to_string())?)?;
             wait_loaded(&l, Duration::from_secs(15)).await;
             text(eval_json(app, &l, SNAPSHOT).await?.as_str().unwrap_or("").to_string())
         }

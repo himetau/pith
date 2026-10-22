@@ -46,10 +46,14 @@ export function s<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<st
   return el;
 }
 
+// cmd on a mac does what ctrl does, shortcuts are written as ctrl+
+const mac = navigator.platform.startsWith("Mac");
+export const mod = (e: KeyboardEvent) => e.ctrlKey || (mac && e.metaKey);
+
 // one listener per key, for things that re-render and re-subscribe
 export function onKey(el: HTMLElement, map: Record<string, (e: KeyboardEvent) => void>) {
   el.addEventListener("keydown", (e) => {
-    const k = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.key.toLowerCase()].filter(Boolean).join("+");
+    const k = [mod(e) && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.key.toLowerCase()].filter(Boolean).join("+");
     const fn = map[k];
     if (fn) { e.preventDefault(); fn(e); }
   });

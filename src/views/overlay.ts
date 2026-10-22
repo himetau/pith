@@ -1,7 +1,7 @@
 // Things that float: context menus, the picker (palette, model, effort, mode), text prompts, lightbox, toasts
 import { app } from "../app";
 import { api } from "../lib/api";
-import { h, swap } from "../lib/dom";
+import { h, mod, swap } from "../lib/dom";
 import { icon } from "../lib/icons";
 import { fuzzy } from "./composer";
 
@@ -33,7 +33,7 @@ export function prompt(title: string, value = "", opts: { multiline?: boolean; p
       h("div.dlg", h("div.dlg-legend", title), field, h("div.dlg-foot", h("button.btn.ghost", { onclick: () => done(null) }, "cancel"), h("button.btn.pri", { onclick: () => done(field.value.trim()) }, "ok"))));
     field.addEventListener("keydown", (e) => {
       if (e.key === "Escape") done(null);
-      if (e.key === "Enter" && (!opts.multiline || (e as KeyboardEvent).ctrlKey)) { e.preventDefault(); done(field.value.trim()); }
+      if (e.key === "Enter" && (!opts.multiline || mod(e as KeyboardEvent))) { e.preventDefault(); done(field.value.trim()); }
     });
     layer().append(scrim);
     field.focus();

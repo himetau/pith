@@ -1,6 +1,6 @@
 // Cards for what an extension asks the user: pith's own permission prompts and ask_user questions,
 // plus plain select / confirm / input / editor from any other extension
-import { h } from "../lib/dom";
+import { h, mod } from "../lib/dom";
 import { tilde } from "../lib/fmt";
 import { icon } from "../lib/icons";
 import { highlight, langOf } from "../lib/md";
@@ -113,7 +113,7 @@ function genericCard(ask: Ask, tab: Tab) {
   const field = ask.method === "editor" ? h("textarea.ask-edit", { rows: 8 }) as HTMLTextAreaElement : h("input.ask-other", { placeholder: ask.placeholder ?? "" }) as HTMLInputElement;
   field.value = ask.prefill ?? "";
   const ok = () => tab.answer(ask.id, { value: field.value });
-  field.addEventListener("keydown", (e: Event) => { const k = e as KeyboardEvent; if (k.key === "Enter" && (ask.method === "input" || k.ctrlKey)) { e.preventDefault(); ok(); } if (k.key === "Escape") cancel(); e.stopPropagation(); });
+  field.addEventListener("keydown", (e: Event) => { const k = e as KeyboardEvent; if (k.key === "Enter" && (ask.method === "input" || mod(k))) { e.preventDefault(); ok(); } if (k.key === "Escape") cancel(); e.stopPropagation(); });
   const el = h("div.ask", legend, field, h("div.ask-foot", h("button.btn.pri", { onclick: ok }, "send"), h("button.btn.ghost", { onclick: cancel }, "cancel")));
   setTimeout(() => field.focus(), 30);
   return { el, key: () => false };

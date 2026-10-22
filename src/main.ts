@@ -8,7 +8,7 @@ import "./styles/pages.css";
 import { act, MODES } from "./actions";
 import { app } from "./app";
 import { api, type Mode } from "./lib/api";
-import { h, swap } from "./lib/dom";
+import { h, mod, swap } from "./lib/dom";
 import { ago, base, home, tilde, titleFrom } from "./lib/fmt";
 import { icon } from "./lib/icons";
 import { toggleFps } from "./fps";
@@ -151,7 +151,7 @@ function mount() {
     const t = app.active, inChat = app.view === "chat" && !!t;
     if (document.querySelector("#overlay .scrim, #overlay .ctx-menu")) return;
     if (inChat && chatFor(t!).handleKey(e)) { e.preventDefault(); return; }
-    const k = [e.ctrlKey && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.key.length === 1 ? e.key.toLowerCase() : e.key].filter(Boolean).join("+");
+    const k = [mod(e) && "ctrl", e.altKey && "alt", e.shiftKey && "shift", e.key.length === 1 ? e.key.toLowerCase() : e.key].filter(Boolean).join("+");
     const run = (fn: () => void) => { e.preventDefault(); fn(); };
     switch (k) {
       case "ctrl+n": return run(() => { app.homeKind = "chat"; app.show("home"); });

@@ -6,11 +6,13 @@
   outputs = { self, nixpkgs }:
     let
       lib = nixpkgs.lib;
-      # linux only, it drives gtk and webkitgtk directly
-      systems = [ "x86_64-linux" "aarch64-linux" ];
+      systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       each = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      mkPith = pkgs: with pkgs; rustPlatform.buildRustPackage {
+      mkPith = pkgs: with pkgs; let
+        # pith runs `pi` and git off PATH. suffixed, so a pi you installed yourself still wins
+        path = lib.makeBinPath [ pi-coding-agent git ];
+      in rustPlatform.buildRustPackage {
         pname = "pith";
         inherit ((lib.importJSON ./src-tauri/tauri.conf.json)) version;
 
@@ -30,17 +32,23 @@
         buildAndTestSubdir = "src-tauri";
         npmDeps = importNpmLock { npmRoot = ./.; };
 
-        nativeBuildInputs = [ cargo-tauri.hook nodejs importNpmLock.npmConfigHook pkg-config wrapGAppsHook3 ];
-        buildInputs = [ glib-networking libsoup_3 webkitgtk_4_1 gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good ];
+        nativeBuildInputs = [ cargo-tauri.hook nodejs importNpmLock.npmConfigHook ]
+          ++ lib.optionals stdenv.hostPlatform.isLinux [ pkg-config wrapGAppsHook3 ]
+          ++ lib.optionals stdenv.hostPlatform.isDarwin [ makeBinaryWrapper ];
+        buildInputs = lib.optionals stdenv.hostPlatform.isLinux [
+          glib-networking libsoup_3 webkitgtk_4_1 gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good
+        ];
 
-        # the deb puts ext/ and prompts/ in lib/pith, which pith checks for. its own .desktop has the keywords and wm class
-        postInstall = ''
+        # linux gets the deb's layout, ext/ and prompts/ in lib/pith, which pith checks for. its own .desktop has the
+        # keywords and wm class. macos gets pith.app, with them in its Resources, and a bin/pith for nix run
+        postInstall = lib.optionalString stdenv.hostPlatform.isLinux ''
           install -Dm644 packaging/pith.desktop $out/share/applications/pith.desktop
+        '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
+          makeWrapper $out/Applications/pith.app/Contents/MacOS/pith $out/bin/pith --suffix PATH : ${path}
         '';
 
-        # pith runs `pi` and git off PATH. suffixed, so a pi you installed yourself still wins
-        preFixup = ''
-          gappsWrapperArgs+=(--suffix PATH : ${lib.makeBinPath [ pi-coding-agent git ]})
+        preFixup = lib.optionalString stdenv.hostPlatform.isLinux ''
+          gappsWrapperArgs+=(--suffix PATH : ${path})
         '';
 
         meta = {
