@@ -33,6 +33,7 @@ fn slug(s: &str) -> String {
     if t.is_empty() { "image".into() } else { t }
 }
 
+#[allow(dead_code)] // the images page only needs the files and the spend
 pub struct Out { pub files: Vec<String>, pub images: Vec<(String, String)>, pub text: String, pub input: f64, pub output: f64 }
 
 pub fn generate(prompt: &str, inputs: &[(String, String)], model: &str, provider: &str, out_dir: &Path, pi: &str) -> Result<Out, String> {

@@ -83,6 +83,8 @@ pub struct Assistant {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Level { Info, Warn, Error }
 
+// ts on a user message is kept for when the transcript shows times
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum ItemKind {
     User { text: String, images: Vec<Img>, entry_id: Option<String>, ts: f64, typed: Option<String> },
@@ -118,7 +120,7 @@ pub struct Command { pub name: String, pub description: String, pub source: Stri
 pub struct Retry { pub attempt: u64, pub max: u64, pub until: Instant, pub error: String }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum How { Auto, Steer, FollowUp }
+pub enum How { Auto, FollowUp }
 
 // what views listen for besides plain notify()
 #[derive(Clone, Debug)]

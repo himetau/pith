@@ -52,14 +52,6 @@ pub fn save_settings(patch: Value) -> Value {
 }
 pub fn setting_str(key: &str) -> String { load_settings().get(key).and_then(|v| v.as_str()).unwrap_or("").to_string() }
 
-// ---------- look ----------
-pub fn read_theme() -> Value {
-    let f = theme_file();
-    match fs::read_to_string(&f) {
-        Ok(css) => json!({ "css": css, "found": true, "file": f }),
-        Err(_) => json!({ "css": "", "found": false, "file": f }),
-    }
-}
 
 // kitty writes "Maple Mono medium", the weight word isn't part of the family
 pub fn terminal_font() -> Value {
@@ -78,16 +70,6 @@ pub fn terminal_font() -> Value {
     Value::Null
 }
 
-// pane gaps, borders and corners match the compositor's windows
-pub fn hypr_look() -> Value {
-    let get = |opt: &str| -> Option<i64> {
-        let out = Command::new("hyprctl").args(["-j", "getoption", opt]).output().ok()?;
-        let j: Value = serde_json::from_slice(&out.stdout).ok()?;
-        j.get("int").and_then(|v| v.as_i64())
-            .or_else(|| j.get("custom").and_then(|v| v.as_str()).and_then(|s| s.split_whitespace().next()?.parse().ok()))
-    };
-    json!({ "rounding": get("decoration:rounding").unwrap_or(8), "gap": get("general:gaps_in").unwrap_or(5), "border": get("general:border_size").unwrap_or(2) })
-}
 
 pub fn pi_version(bin: &str) -> String {
     Command::new(bin).arg("--version").output().ok()
@@ -132,7 +114,6 @@ pub fn git_diff(cwd: &str, file: &str, untracked: bool) -> String {
     else { run("git", &["diff", "HEAD", "--no-color", "-U4", "--", file], cwd) }
 }
 
-pub fn git_branch(cwd: &str) -> String { run("git", &["rev-parse", "--abbrev-ref", "HEAD"], cwd).trim().to_string() }
 
 // for @ mentions. git knows what's ignored, outside a repo fall back to a shallow walk
 pub fn list_files(cwd: &str) -> Vec<String> {

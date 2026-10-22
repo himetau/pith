@@ -415,9 +415,11 @@ pub fn row(tb: &ToolBlock, ui: &Ui, cx: &App) -> AnyElement {
             tab.update(cx, |t, cx| {
                 let mut a = args.clone();
                 if let Some(path) = a["path"].as_str().filter(|p| !p.starts_with('/')) { a["path"] = Value::from(format!("{}/{}", t.cwd.trim_end_matches('/'), path.trim_start_matches("./"))); }
+                crate::core::preview::show(&t.id, a["path"].as_str(), a["url"].as_str());
                 t.preview = Some(a);
                 cx.emit(TabEvent::Preview);
-            })
+            });
+            super::panes::open(super::panes::Pane::Preview, cx);
         })
     });
     let head = h_flex().id(SharedString::from(format!("tool-{}", tb.id))).gap_2().items_center().min_w_0().h(px(26.)).text_sm()

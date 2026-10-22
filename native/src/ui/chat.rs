@@ -416,4 +416,3 @@ impl Render for ChatView {
     }
 }
 
-pub fn open_chat(app: &Entity<Pith>, cx: &App) -> Option<Entity<Tab>> { app.read(cx).active.clone() }

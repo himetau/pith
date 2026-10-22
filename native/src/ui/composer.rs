@@ -484,13 +484,13 @@ impl Render for Composer {
         let focused = self.input.read(cx).focus_handle(cx).is_focused(window);
         if focused { LAST.with(|l| *l.borrow_mut() = Some(cx.entity().downgrade())); }
         let tab = self.tab.clone();
-        let (running, mode, model, level, reasoning, ctx, cost, queued) = match &tab {
+        let (running, mode, model, level, reasoning, ctx, cost) = match &tab {
             Some(t) => {
                 let t = t.read(cx);
                 let model = t.state["model"]["name"].as_str().filter(|s| !s.is_empty()).map(String::from).or_else(|| t.model_label());
-                (t.running(), t.mode, model, t.state["thinkingLevel"].as_str().map(String::from), t.state["model"]["reasoning"] != false, t.context_percent(), t.cost(), t.queue.0.len() + t.queue.1.len())
+                (t.running(), t.mode, model, t.state["thinkingLevel"].as_str().map(String::from), t.state["model"]["reasoning"] != false, t.context_percent(), t.cost())
             }
-            None => (false, Pith::global(cx).read(cx).mode_default(), None, None, false, None, 0.0, 0),
+            None => (false, Pith::global(cx).read(cx).mode_default(), None, None, false, None, 0.0),
         };
         let empty = self.text(cx).trim().is_empty();
         let answering = self.input_ask(cx).is_some();
@@ -549,7 +549,6 @@ impl Render for Composer {
         } else if answering {
             footer = footer.child(div().text_xs().text_color(p.gold).mr_2().child("pi is waiting for your answer"));
         }
-        if queued > 0 { footer = footer.child(div().text_xs().text_color(p.dim).mr_2().child(format!("{queued} queued"))); }
         if let Some(pct) = ctx {
             footer = footer.child(div().text_xs().text_color(if pct > 80. { p.gold } else { p.dim }).mr_2().child(format!("{:.0}% context", pct)));
         }
