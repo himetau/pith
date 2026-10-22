@@ -33,7 +33,6 @@ pub enum Pane { Changes, Files, Terminal, Agents, Browser, Preview }
 const PANES: [(Pane, &str); 6] = [(Pane::Changes, "Changes"), (Pane::Files, "Files"), (Pane::Terminal, "Terminal"), (Pane::Agents, "Agents"), (Pane::Browser, "Browser"), (Pane::Preview, "Preview")];
 
 pub const MIN_W: f32 = 320.;
-pub const MAX_W: f32 = 900.;
 
 // a file asked for from outside the panel (a path in the chat). it opens the panel and lands in Files
 static REVEAL: Mutex<Option<(String, Option<usize>)>> = Mutex::new(None);
@@ -190,7 +189,8 @@ impl SidePanel {
 
     fn resize(&mut self, e: &DragMoveEvent<ResizeDrag>, window: &mut Window, cx: &mut Context<Self>) {
         let vw = f32::from(window.viewport_size().width);
-        let w = (vw - f32::from(e.event.position.x)).clamp(MIN_W, MAX_W.min(vw - MIN_W).max(MIN_W)).round();
+        let w = (vw - f32::from(e.event.position.x)).clamp(MIN_W, (vw - 520.).max(MIN_W)).round();
+        // main.ts: at least 320, and the main window keeps 520
         if (self.app.read(cx).side_w - w).abs() < 0.5 { return; }
         self.app.update(cx, |a, cx| { a.side_w = w; cx.notify(); });
         // the width is saved once the drag settles, not on every move

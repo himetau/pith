@@ -802,6 +802,8 @@ impl Tab {
         if self.file.is_some() || self.live_process() { self.with_pi(json!({ "type": "set_session_name", "name": name }), cx, |_, _, _| {}); }
     }
 
+    // pi's new_session on this process. the palette doesn't offer it any more (the webview never did)
+    #[allow(dead_code)]
     pub fn new_session(&mut self, cx: &mut Context<Self>) {
         self.with_pi(json!({ "type": "new_session" }), cx, |t, r, cx| {
             if r["success"] == true && r["data"]["cancelled"] != true { t.name = None; t.reload_state(true, cx); }
