@@ -25,6 +25,13 @@ npm run install-desktop   # build it and put it in the launcher
 a .desktop entry, so quickshell, rofi and anything else that reads those can open
 it. run it again to update. `npm run build` gives you an appimage and a .deb.
 
+or with nix, on linux or an apple silicon mac. it brings pi along too (a pi already
+on your PATH wins):
+
+```sh
+nix run github:himetau/pith
+```
+
 ## what it does
 
 - several sessions at once, background ones ping you when theyre done or stuck

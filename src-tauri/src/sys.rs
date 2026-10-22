@@ -223,7 +223,7 @@ pub fn save_agent(def: &Value, cwd: Option<&str>, scope: &str) -> String {
 
 fn alive(pid: i64) -> bool {
     // signal 0 only checks; EPERM still means it exists
-    unsafe { libc::kill(pid as i32, 0) == 0 || *libc::__errno_location() == libc::EPERM }
+    (unsafe { libc::kill(pid as i32, 0) == 0 }) || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 // the extension can die mid-run and leave agents marked running forever, so check their pid

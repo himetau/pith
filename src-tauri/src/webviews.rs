@@ -1,6 +1,6 @@
 // The browser and preview panes are real webviews laid over the side window, one each per session.
 // The ui tells us where its pane is (web_layout) and everything not in that list gets hidden.
-// JS results and screenshots go through WebKitGTK directly, Tauri's eval can't return anything
+// Screenshots go through the platform's webview directly (WebKitGTK, WKWebView), tauri has no api for them
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -53,7 +53,8 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
     let (a1, a2, a3) = (app.clone(), app.clone(), app.clone());
     let (l1, l2) = (l.clone(), l.clone());
     let is_web = kind == "web";
-    let mut b = WebviewBuilder::new(&l, WebviewUrl::External(parsed.clone()))
+    let first = if cfg!(target_os = "macos") && parsed.scheme() == "file" { "about:blank".parse().unwrap() } else { parsed.clone() };
+    let mut b = WebviewBuilder::new(&l, WebviewUrl::External(first))
         .on_page_load(move |wv, p| {
             let label = wv.label().to_string();
             set_loading(&label, matches!(p.event(), PageLoadEvent::Started));
@@ -77,6 +78,33 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
     let wv = win.add_child(b, LogicalPosition::new(-20000.0, 0.0), LogicalSize::new(1100.0, 760.0)).map_err(|e| e.to_string())?;
     let _ = wv.set_auto_resize(false);
     let _ = wv.hide();
+    #[cfg(target_os = "macos")]
+    if parsed.scheme() == "file" { go(&wv, parsed)?; }
+    #[cfg(target_os = "linux")]
+    overlay(&wv, is_web);
+    Ok(wv)
+}
+
+// navigate, but a file url on macos goes through loadFileURL so the page can read the files next to it.
+// wkwebview's plain loadRequest only lets the webcontent process read the one file
+pub fn go(wv: &Webview, url: Url) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if url.scheme() == "file" {
+        let Ok(path) = url.to_file_path() else { return Err(format!("bad file url {url}")) };
+        let dir = path.parent().map(|d| d.to_path_buf()).unwrap_or(path.clone());
+        return wv.with_webview(move |pv| unsafe {
+            use objc2_foundation::{NSString, NSURL};
+            let view = &*(pv.inner() as *const objc2_web_kit::WKWebView);
+            let file = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+            let read = NSURL::fileURLWithPath(&NSString::from_str(&dir.to_string_lossy()));
+            view.loadFileURL_allowingReadAccessToURL(&file, &read);
+        }).map_err(|e| e.to_string());
+    }
+    wv.navigate(url).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn overlay(wv: &Webview, is_web: bool) {
     // tauri's window.add_child packs into a vertical GtkBox on linux, which splits the window vertically
     // and ignores set_position/set_size. move the widget into a GtkOverlay over the main webview instead
     let _ = wv.with_webview(move |pv| {
@@ -114,12 +142,12 @@ pub fn ensure(app: &AppHandle, kind: &str, tab: &str, url: &str) -> Result<Webvi
             overlay.add_overlay(&widget);
         }
     });
-    Ok(wv)
 }
 
 // webkit holds page rendering to ~60fps even on faster screens (PreferPageRenderingUpdatesNear60FPS, on by default).
 // that caps scrolling and animation at 60 on a 180hz monitor, so every webview pith makes turns it off.
 // the gtk bindings don't wrap webkit's feature api, so it's called straight from the library they link
+#[cfg(target_os = "linux")]
 pub fn native_refresh(view: &webkit2gtk::WebView) {
     use gtk::glib::object::ObjectType;
     use std::ffi::{c_char, c_void, CStr};
@@ -152,6 +180,7 @@ pub fn native_refresh(view: &webkit2gtk::WebView) {
 // after each paint this fills the interval in from the monitor the window is on, if gtk left it empty.
 // GdkFrameTimings is private, so the field is found by offset and checked against the public getter before writing;
 // if gtk ever moves it they won't agree and this does nothing
+#[cfg(target_os = "linux")]
 pub fn pace_frame_clock(win: &gtk::ApplicationWindow) {
     use gtk::prelude::*;
     use gtk::glib::translate::ToGlibPtr;
@@ -175,6 +204,13 @@ pub fn pace_frame_clock(win: &gtk::ApplicationWindow) {
     if win.frame_clock().is_some() { hook(win); } else { win.connect_realize(move |w| hook(w)); }
 }
 
+// gtk ignores tauri's set_position/set_size for child webviews (see overlay), everywhere else they work
+#[cfg(not(target_os = "linux"))]
+fn place(wv: &Webview, x: f64, y: f64, w: f64, h: f64) {
+    let _ = wv.set_position(LogicalPosition::new(x, y));
+    let _ = wv.set_size(LogicalSize::new(w.max(1.0), h.max(1.0)));
+}
+#[cfg(target_os = "linux")]
 fn place(wv: &Webview, x: f64, y: f64, w: f64, h: f64) {
     let _ = wv.with_webview(move |pv| {
         use gtk::prelude::*;
@@ -205,7 +241,7 @@ pub fn layout(app: &AppHandle, slots: Vec<Slot>, home: &str) -> Result<(), Strin
             let m = req.get_or_insert_with(HashMap::new);
             if m.get(&l) != Some(u) {
                 m.insert(l.clone(), u.clone());
-                if let Ok(parsed) = u.parse::<Url>() { set_loading(&l, true); let _ = wv.navigate(parsed); }
+                if let Ok(parsed) = u.parse::<Url>() { set_loading(&l, true); let _ = go(&wv, parsed); }
             }
         }
         place(&wv, s.x, s.y, s.w, s.h);
@@ -264,6 +300,7 @@ pub async fn eval_json(app: &AppHandle, label: &str, body: &str) -> Result<Value
 }
 
 // png of what the webview shows
+#[cfg(target_os = "linux")]
 pub async fn snapshot(app: &AppHandle, label: &str) -> Result<Vec<u8>, String> {
     let wv = app.get_webview(label).ok_or_else(|| format!("no webview {label}"))?;
     let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
@@ -278,6 +315,33 @@ pub async fn snapshot(app: &AppHandle, label: &str) -> Result<Vec<u8>, String> {
             });
             let _ = tx.send(out);
         });
+    }).map_err(|e| e.to_string())?;
+    tokio::time::timeout(Duration::from_secs(15), rx).await.map_err(|_| "screenshot timed out".to_string())?.map_err(|_| "webview went away".to_string())?
+}
+
+#[cfg(target_os = "macos")]
+pub async fn snapshot(app: &AppHandle, label: &str) -> Result<Vec<u8>, String> {
+    let wv = app.get_webview(label).ok_or_else(|| format!("no webview {label}"))?;
+    let (tx, rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, String>>();
+    let tx = Mutex::new(Some(tx));
+    wv.with_webview(move |pv| unsafe {
+        use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSImage};
+        use objc2_foundation::{NSDictionary, NSError};
+        let view = &*(pv.inner() as *const objc2_web_kit::WKWebView);
+        let done = block2::RcBlock::new(move |img: *mut NSImage, err: *mut NSError| {
+            let out = if let Some(img) = img.as_ref() {
+                // the snapshot is at the screen's scale, a png comes out of a bitmap rep of its tiff
+                img.TIFFRepresentation()
+                    .and_then(|tiff| NSBitmapImageRep::imageRepWithData(&tiff))
+                    .and_then(|rep| rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()))
+                    .map(|png| png.to_vec())
+                    .ok_or_else(|| "couldn't encode the snapshot".to_string())
+            } else {
+                Err(err.as_ref().map(|e| e.localizedDescription().to_string()).unwrap_or_else(|| "snapshot failed".into()))
+            };
+            if let Some(t) = tx.lock().unwrap().take() { let _ = t.send(out); }
+        });
+        view.takeSnapshotWithConfiguration_completionHandler(None, &done);
     }).map_err(|e| e.to_string())?;
     tokio::time::timeout(Duration::from_secs(15), rx).await.map_err(|_| "screenshot timed out".to_string())?.map_err(|_| "webview went away".to_string())?
 }

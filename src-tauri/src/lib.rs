@@ -127,7 +127,7 @@ fn settings_set(patch: Value) -> Value { sys::save_settings(patch) }
 fn sys_info() -> Value {
     json!({
         "home": sys::home(), "piVersion": sys::pi_version(&sys::setting_str("piPath")), "font": sys::terminal_font(), "hypr": sys::hypr_look(),
-        "theme": sys::read_theme(), "imagesDir": sys::images_dir(), "agentDir": sys::agent_dir(), "configDir": sys::config_dir(), "platform": "linux",
+        "theme": sys::read_theme(), "imagesDir": sys::images_dir(), "agentDir": sys::agent_dir(), "configDir": sys::config_dir(), "platform": std::env::consts::OS,
     })
 }
 #[tauri::command]
@@ -269,7 +269,7 @@ fn web_navigate(app: AppHandle, tab: String, url: String) -> Result<(), String> 
     let l = webviews::label("web", &tab);
     let wv = app.get_webview(&l).ok_or("no browser yet")?;
     webviews::mark_loading(&l);
-    wv.navigate(url.parse().map_err(err)?).map_err(err)
+    webviews::go(&wv, url.parse().map_err(err)?)
 }
 #[tauri::command]
 fn web_go(app: AppHandle, kind: String, tab: String, what: String) -> Result<(), String> {
@@ -361,6 +361,7 @@ fn watch_dir(dir: PathBuf, test: impl Fn(&str) -> bool + Send + 'static, fire: i
 
 pub fn run() {
     // the wayland app_id, so the compositor and launchers match the window to pith.desktop
+    #[cfg(target_os = "linux")]
     gtk::glib::set_prgname(Some("pith"));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -370,42 +371,47 @@ pub fn run() {
         .setup(|app| {
             let h = app.handle().clone();
             // pi and the shell read the extension and prompts off disk. bundled builds carry them as resources,
-            // the launcher's copy (scripts/install-desktop.sh) keeps them next to the binary, a dev build reads the repo
+            // the launcher's copy (scripts/install-desktop.sh) keeps them next to the binary, a dev build reads the repo.
+            // the nix package puts them in lib/pith beside bin/, tauri only guesses that for /usr/bin
             let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
-            let bundled = [app.path().resource_dir().ok(), exe_dir].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists());
+            let lib_dir = exe_dir.as_ref().map(|d| d.join("../lib/pith"));
+            let bundled = [app.path().resource_dir().ok(), exe_dir, lib_dir].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists());
             let _ = RES.set(bundled.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")));
             let hb = h.clone();
             let _ = BRIDGE.set(bridge::start(move |tab, op, args| bridge_call(&hb, tab, op, args)));
 
             let hidden = std::env::var_os("PITH_HIDDEN").is_some();
             let win = tauri::window::WindowBuilder::new(app, "main")
-                .title("pith").inner_size(1480.0, 940.0).min_inner_size(760.0, 480.0).decorations(false).visible(!hidden)
+                .title("pith").inner_size(1480.0, 940.0).min_inner_size(760.0, 480.0).decorations(!cfg!(target_os = "linux")).visible(!hidden)
                 .build()?;
             let size = win.inner_size()?.to_logical::<f64>(win.scale_factor()?);
-            let main = win.add_child(WebviewBuilder::new("main", WebviewUrl::App("index.html".into())).auto_resize(), LogicalPosition::new(0.0, 0.0), size)?;
-            let _ = main.with_webview(|pv| webviews::native_refresh(&pv.inner()));
-            if let Ok(gw) = win.gtk_window() { webviews::pace_frame_clock(&gw); }
-            // PITH_FRAME_LOG=1: logs gtk's frame clock once a second (it keeps the clock ticking to measure it).
-            // webkit hands a frame back only after gtk paints it, so this is the real ceiling on fps
-            if std::env::var_os("PITH_FRAME_LOG").is_some() {
-                if let Ok(gw) = win.gtk_window() {
-                    use gtk::prelude::*;
-                    let n = std::rc::Rc::new(std::cell::Cell::new((0u32, 0i64)));
-                    // it redraws every tick: gtk only gets real timings back from the compositor for frames it commits
-                    gw.add_tick_callback(move |w, clock| {
-                        w.queue_draw();
-                        let (count, since) = n.get();
-                        let now = clock.frame_time();
-                        if since == 0 { n.set((0, now)); return gtk::glib::ControlFlow::Continue; }
-                        if now - since >= 1_000_000 {
-                            let (interval, _) = clock.refresh_info(now);
-                            let timings = clock.current_timings().and_then(|t| t.refresh_interval()).map(|v| v.get() as i64).unwrap_or(-1);
-                            let mon = w.window().and_then(|gw| w.display().monitor_at_window(&gw)).map(|m| format!("{:?} {}mHz", m.model(), m.refresh_rate())).unwrap_or_else(|| "none".into());
-                            eprintln!("frame clock: {} fps, refresh interval {}us, last timings {}us, on monitor {}", count + 1, interval, timings, mon);
-                            n.set((0, now));
-                        } else { n.set((count + 1, since)); }
-                        gtk::glib::ControlFlow::Continue
-                    });
+            let _main = win.add_child(WebviewBuilder::new("main", WebviewUrl::App("index.html".into())).auto_resize(), LogicalPosition::new(0.0, 0.0), size)?;
+            #[cfg(target_os = "linux")]
+            {
+                let _ = _main.with_webview(|pv| webviews::native_refresh(&pv.inner()));
+                if let Ok(gw) = win.gtk_window() { webviews::pace_frame_clock(&gw); }
+                // PITH_FRAME_LOG=1: logs gtk's frame clock once a second (it keeps the clock ticking to measure it).
+                // webkit hands a frame back only after gtk paints it, so this is the real ceiling on fps
+                if std::env::var_os("PITH_FRAME_LOG").is_some() {
+                    if let Ok(gw) = win.gtk_window() {
+                        use gtk::prelude::*;
+                        let n = std::rc::Rc::new(std::cell::Cell::new((0u32, 0i64)));
+                        // it redraws every tick: gtk only gets real timings back from the compositor for frames it commits
+                        gw.add_tick_callback(move |w, clock| {
+                            w.queue_draw();
+                            let (count, since) = n.get();
+                            let now = clock.frame_time();
+                            if since == 0 { n.set((0, now)); return gtk::glib::ControlFlow::Continue; }
+                            if now - since >= 1_000_000 {
+                                let (interval, _) = clock.refresh_info(now);
+                                let timings = clock.current_timings().and_then(|t| t.refresh_interval()).map(|v| v.get() as i64).unwrap_or(-1);
+                                let mon = w.window().and_then(|gw| w.display().monitor_at_window(&gw)).map(|m| format!("{:?} {}mHz", m.model(), m.refresh_rate())).unwrap_or_else(|| "none".into());
+                                eprintln!("frame clock: {} fps, refresh interval {}us, last timings {}us, on monitor {}", count + 1, interval, timings, mon);
+                                n.set((0, now));
+                            } else { n.set((count + 1, since)); }
+                            gtk::glib::ControlFlow::Continue
+                        });
+                    }
                 }
             }
 
