@@ -1,25 +1,25 @@
 // One session's chat: the transcript, then the dock (what pi is doing, the plan, queued messages, its questions) and the composer.
-// one view per tab, so the draft and the scroll position stay with the session
+// one view per tab, so the draft and the scroll position stay with the session. the look is chat.css
 use super::composer::{Composer, ComposerEvent};
-use super::theme::pal;
+use super::theme::{em, geo, pal, u};
 use super::tools::{self, Ui};
-use super::transcript::{code, dock, md, media};
+use super::transcript::text::sel;
+use super::transcript::{code, dock, md, media, steps};
 use crate::state::app::Pith;
-use crate::state::tab::{Ask, Assistant, Block, ItemKind, Level, Status, Tab, TabEvent};
+use crate::state::tab::{Ask, Assistant, Block, Img, ItemKind, Kind, Level, Status, Tab, TabEvent};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::clipboard::Clipboard;
-use gpui_kit::component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::text::TextView;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::rc::Rc;
+use std::time::Duration;
 
-pub const MAX_W: f32 = 760.;
+// .tx-wrap and .dock: 900 wide at most, 28 either side, inside that
+pub const MAX_W: f32 = 900.;
+pub const SIDE: f32 = 28.;
 
 pub struct ChatView {
     pub tab: Entity<Tab>,
@@ -31,8 +31,12 @@ pub struct ChatView {
     pub open: HashSet<String>,
     closed: HashSet<String>,
     plan_open: bool,
+    // the working line opens into the run's steps
+    steps_open: bool,
     // options ticked on a pick-any question, by ask id and option index
     picked: HashSet<(String, usize)>,
+    // running tool rows and the working line tick while a run is on
+    tick: Option<Task<()>>,
     _subs: Vec<Subscription>,
 }
 
@@ -41,11 +45,14 @@ impl ChatView {
         let composer = cx.new(|cx| Composer::new(Some(tab.clone()), window, cx));
         let working = cx.new(|cx| dock::Working::new(tab.clone(), cx));
         let n = tab.read(cx).items.len();
-        let list = ListState::new(n, ListAlignment::Top, px(1200.));
+        // the items, then the live line as the last row (it scrolls with the transcript, like .live-line in .tx-wrap)
+        let list = ListState::new(n + 1, ListAlignment::Top, px(1200.));
         list.set_follow_mode(FollowMode::Tail);
         list.scroll_to_end();
+        let weak = cx.weak_entity();
+        list.set_scroll_handler(move |_, _, cx| { let _ = weak.update(cx, |_, cx| cx.notify()); });
         let subs = vec![
-            cx.observe(&tab, |this, tab, cx| { this.sync(&tab, cx); cx.notify(); }),
+            cx.observe(&tab, |this, tab, cx| { this.sync(&tab, cx); this.ticking(cx); cx.notify(); }),
             cx.subscribe_in(&tab, window, |this, _, ev: &TabEvent, window, cx| {
                 if let TabEvent::Draft(text) = ev {
                     this.composer.update(cx, |c, cx| c.set_text(text, window, cx));
@@ -61,7 +68,7 @@ impl ChatView {
                     if let Some(a) = this.tab.read(cx).asks.first().filter(|a| a.method == "input" || a.method == "editor").cloned() {
                         if !text.is_empty() { this.tab.update(cx, |t, cx| t.answer(&a.id, json!({ "value": text }), cx)); return; }
                     }
-                    this.list.scroll_to_end();
+                    this.list.set_follow_mode(FollowMode::Tail);
                     this.tab.update(cx, |t, cx| {
                         if let Some(cmd) = text.strip_prefix('!') {
                             let (exclude, cmd) = match cmd.strip_prefix('!') { Some(c) => (true, c), None => (false, cmd) };
@@ -74,7 +81,9 @@ impl ChatView {
         ];
         let first = tab.read(cx).items.first().map(|i| i.id);
         let v = tab.read(cx).version;
-        ChatView { tab, composer, working, list, seen: (n, first, v), open: HashSet::new(), closed: HashSet::new(), plan_open: false, picked: HashSet::new(), _subs: subs }
+        let mut this = ChatView { tab, composer, working, list, seen: (n, first, v), open: HashSet::new(), closed: HashSet::new(), plan_open: false, steps_open: false, picked: HashSet::new(), tick: None, _subs: subs };
+        this.ticking(cx);
+        this
     }
 
     // keeps the list's measurements in step with the transcript. only the tail is measured again: that's where a stream
@@ -83,17 +92,29 @@ impl ChatView {
         let t = tab.read(cx);
         let n = t.items.len();
         let first = t.items.first().map(|i| i.id);
-        if t.version == self.seen.2 { return; }
+        // the live line changes with the status, not the version
+        if t.version == self.seen.2 { self.list.remeasure_items(n..n + 1); return; }
         let (old_n, old_first, _) = self.seen;
         if first != old_first || n < old_n {
-            self.list.reset(n);
+            self.list.reset(n + 1);
             self.list.scroll_to_end();
         } else {
             if n > old_n { self.list.splice(old_n..old_n, n - old_n); }
             let from = old_n.saturating_sub(2).min(n);
-            if from < n { self.list.remeasure_items(from..n); }
+            self.list.remeasure_items(from..n + 1);
         }
         self.seen = (n, first, t.version);
+    }
+
+    // a clock for the running rows' elapsed time and the steps view, only while something runs
+    fn ticking(&mut self, cx: &mut Context<Self>) {
+        let busy = self.tab.read(cx).running();
+        if !busy { self.tick = None; return; }
+        if self.tick.is_some() { return; }
+        self.tick = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(Duration::from_millis(480)).await;
+            if this.update(cx, |v, cx| { let n = v.tab.read(cx).items.len(); if v.steps_open { v.list.remeasure_items(n..n + 1); } cx.notify(); }).is_err() { break; }
+        }));
     }
 
     pub fn focus_composer(this: &Entity<Self>, window: &mut Window, cx: &mut App) { let f = this.read(cx).composer.read(cx).focus_handle(cx); f.focus(window, cx); }
@@ -110,179 +131,284 @@ impl ChatView {
         Rc::new(move |key, was, cx| { let _ = weak.update(cx, |v, cx| v.toggle(key, was, ix, cx)); })
     }
 
-    fn render_item(&mut self, ix: usize, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn render_item(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let tab_e = self.tab.clone();
         let tab = tab_e.read(cx);
+        if ix == tab.items.len() { return self.live_line(window, cx); }
         let Some(item) = tab.items.get(ix) else { return div().into_any_element() };
         let p = pal(cx);
         let id = item.id;
         let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(ix, cx), tab: &tab_e, cwd: &tab.cwd };
-        // a turn's first message gets more room above it than the steps inside a turn
-        let gap_top = match &item.kind { ItemKind::User { .. } if ix > 0 => px(20.), _ => px(6.) };
+        let last_of_turn = |ix: usize| {
+            let next = tab.items[ix + 1..].iter().find(|i| matches!(i.kind, ItemKind::User { .. } | ItemKind::Assistant(_)));
+            match next { Some(i) => matches!(i.kind, ItemKind::User { .. }), None => !tab.running() }
+        };
+        // css margins between items, collapsed: the gap above is the bigger of the last one's bottom and this one's top
+        let gap = match ix.checked_sub(1).map(|j| margins(tab, j, last_of_turn(j), &ui)) {
+            None => if matches!(item.kind, ItemKind::User { .. }) { 4. } else { margins(tab, ix, false, &ui).0 },
+            Some((_, b)) => b.max(margins(tab, ix, false, &ui).0),
+        };
         let body: AnyElement = match &item.kind {
-            ItemKind::User { text, typed, images, entry_id, .. } => user(id, text, typed.as_deref(), images, entry_id.clone(), tab.running(), &tab_e, cx),
-            ItemKind::Assistant(a) => {
-                let last_of_turn = {
-                    let next = tab.items[ix + 1..].iter().find(|i| matches!(i.kind, ItemKind::User { .. } | ItemKind::Assistant(_)));
-                    match next { Some(i) => matches!(i.kind, ItemKind::User { .. }), None => !tab.running() }
-                };
-                assistant(id, a, last_of_turn, &ui, tab, cx)
-            }
+            ItemKind::User { text, typed, images, entry_id, .. } => self.user(id, text, typed.as_deref(), images, entry_id.clone(), cx),
+            ItemKind::Assistant(a) => assistant(id, ix, a, last_of_turn(ix), &ui, tab, cx),
             ItemKind::Bash { command, output, exit, running, cancelled, excluded, .. } => tools::shell(id, command, output, *exit, *running, *cancelled, *excluded, cx).into_any_element(),
             ItemKind::Compaction { summary, tokens_before } => {
-                let label = match tokens_before { Some(n) => format!("Context compacted from {}", tools::tokens(*n)), None => "Context compacted".into() };
+                let label = format!("compacted{}", tokens_before.map(|n| format!(" · {} tokens summarised", tools::tok(n))).unwrap_or_default());
                 marker(format!("cmp{id}"), label, summary, &ui, cx)
             }
-            ItemKind::Branch { summary } => marker(format!("br{id}"), "Came back from another branch".into(), summary, &ui, cx),
-            ItemKind::Custom { kind, text } => v_flex().gap_1().child(div().text_xs().text_color(p.dim).child(kind.clone()))
-                .child(md::markdown(ElementId::Name(format!("c{id}").into()), text.clone(), cx)).into_any_element(),
+            ItemKind::Branch { summary } => marker(format!("br{id}"), "came back from another branch".into(), summary, &ui, cx),
+            // .msg.custom: a tertiary rule on the left, its type, then the text
+            ItemKind::Custom { kind, text } => div().px(u(12.)).py(u(6.)).border_l(u(2.)).border_color(p.tertiary)
+                .child(div().text_color(p.dim).child(kind.clone()))
+                .child(md::prose(format!("c{id}"), text, false, false, Some(&tab_e), cx)).into_any_element(),
+            // .note: a short line with a rule, coloured by level
             ItemKind::Note { level, text } => {
-                let (c, icon) = match level { Level::Error => (p.red, IconName::CircleAlert), Level::Warn => (p.gold, IconName::TriangleAlert), Level::Info => (p.dim, IconName::Info) };
-                h_flex().gap_2().items_start().text_sm().text_color(c)
-                    .child(div().flex_none().pt(px(3.)).child(Icon::new(icon).xsmall()))
-                    .child(div().min_w_0().child(text.clone())).into_any_element()
+                let (c, rule) = match level { Level::Error => (p.red, p.red), Level::Warn => (p.gold, p.gold), Level::Info => (p.mid, p.dim) };
+                div().px(u(10.)).py(u(2.)).text_size(em(cx, 0.88)).border_l(u(2.)).border_color(rule).text_color(c)
+                    .child(sel(SharedString::from(format!("n{id}")), text.clone())).into_any_element()
             }
         };
-        h_flex().w_full().justify_center().px_6().child(div().w_full().max_w(px(MAX_W)).pt(gap_top).pb(px(6.)).child(body)).into_any_element()
+        wrap(div().pt(u(gap)).child(body), cx)
     }
 
-    fn empty_state(&self, cx: &Context<Self>) -> AnyElement {
+    // .live-line: what pi is doing, under the last message. a click on a running one opens its steps
+    fn live_line(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
         let t = self.tab.read(cx);
-        if t.file.is_some() && matches!(t.status, Status::Starting | Status::Cold) {
-            return h_flex().gap_2().items_center().text_sm().text_color(p.dim).child(Spinner::new().xsmall().color(p.dim)).child("Opening the session").into_any_element();
-        }
-        let design = t.kind == crate::state::tab::Kind::Design;
-        let starters: &[(&str, &str)] = if design {
-            &[("A landing page for…", ""), ("A settings screen for a music app, dark", "A settings screen for a music app, dark"), ("An app icon for…", "/image ")]
-        } else {
-            &[("Review the changes on this branch", "/review"), ("Explain how … works", "/explain "), ("Write an AGENTS.md for this project", "/init"), ("Simplify what changed", "/simplify")]
+        let (running, dead, err) = (t.running(), t.status == Status::Dead, t.error.clone());
+        let last_bottom = t.items.len().checked_sub(1).map(|j| {
+            let ui = Ui { open: &self.open, closed: &self.closed, toggle: self.toggler(j, cx), tab: &self.tab, cwd: &t.cwd };
+            margins(t, j, !t.running(), &ui).1
+        }).unwrap_or(0.);
+        let steps = (running && self.steps_open).then(|| steps::run_steps(t, cx));
+        let weak = cx.weak_entity();
+        let tab_e = self.tab.clone();
+        let line = div().id("live-line").w_full().min_h(em(cx, 0.9 * 1.6)).text_size(em(cx, 0.9)).text_color(p.mid)
+            .child(div().id("live-head").when(running, |d| d.cursor_pointer().on_click(move |_, _, cx| {
+                let _ = weak.update(cx, |v, cx| { v.steps_open = !v.steps_open; let n = v.tab.read(cx).items.len(); v.list.remeasure_items(n..n + 1); cx.notify(); });
+            })).child(self.working.clone()))
+            .children(steps)
+            // pi stopped: what it said on the way out, and a way back
+            .when(dead, |d| d.child(div().flex().flex_wrap().items_baseline().gap(u(8.))
+                .child(div().text_color(p.red).child("pi stopped"))
+                .when(!err.is_empty(), |d| d.child(div().id("dead-err").w_full().my(u(6.)).px(u(10.)).py(u(8.)).bg(p.del_bg).text_color(p.mid).rounded(u(5.)).max_h(u(200.)).overflow_y_scroll()
+                    .child(sel("dead-err-t", err.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect::<String>()))))
+                .child(div().id("restart").ml(u(10.)).text_size(em(cx, 0.8)).px(u(7.)).rounded(u(4.)).border(u(1.)).border_color(p.line).text_color(p.mid).cursor_pointer()
+                    .hover(|s| s.bg(pal_hover())).child("start again").on_click(move |_, _, cx| tab_e.update(cx, |t, cx| { let _ = t.ensure(cx); })))));
+        wrap(div().pt(u(last_bottom.max(8.))).pb(u(18. + 6.)).child(line), cx)
+    }
+
+    // .msg.user: raised, a primary bar on the left, the ❯ prompt, copy and branch on hover
+    fn user(&self, id: u64, text: &str, typed: Option<&str>, images: &[Img], entry_id: Option<String>, cx: &Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        let g = geo(cx);
+        let group = SharedString::from(format!("u{id}"));
+        let tab = self.tab.clone();
+        let exp_key = format!("uexp{id}");
+        let exp_open = self.open.contains(&exp_key);
+        let ix = self.tab.read(cx).items.iter().position(|i| i.id == id).unwrap_or(0);
+        let weak = cx.weak_entity();
+        let toggle = move |_: &ClickEvent, _: &mut Window, cx: &mut App| { let k = exp_key.clone(); let _ = weak.update(cx, |v, cx| v.toggle(k, exp_open, ix, cx)); };
+        let body = div().flex_1().min_w_0()
+            .when(!images.is_empty(), |d| d.child(media::strip(&format!("ui{id}"), images.iter().map(|i| (i.data.as_str(), i.mime.as_str())), 84., 1000., 5., true, 6., cx).mb(u(6.))))
+            .child(match typed {
+                Some(t) => div().text_color(p.accent).child(sel(SharedString::from(format!("ut{id}")), t.to_string())),
+                None => div().child(sel(SharedString::from(format!("ut{id}")), text.to_string())),
+            })
+            .when(typed.is_some(), |d| {
+                let mid = p.mid;
+                d.child(div().id(SharedString::from(format!("ux{id}"))).mt(u(2.)).text_size(em(cx, 0.8)).text_color(p.dim).cursor_pointer().hover(move |s| s.text_color(mid))
+                    .child(format!("{} expanded prompt", if exp_open { "▾" } else { "▸" })).on_click(toggle))
+                    .when(exp_open, |d| d.child(div().mt(u(4.)).text_size(em(cx, 0.9)).text_color(p.dim).child(sel(SharedString::from(format!("ue{id}")), text.to_string()))))
+            });
+        let copy_text = text.to_string();
+        let edit = {
+            let (tab, e) = (tab.clone(), entry_id.clone());
+            move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+                let Some(e) = e.clone() else { return };
+                if tab.read(cx).running() { Pith::global(cx).update(cx, |a, cx| a.toast(Level::Info, "stop the run first, then branch", cx)); return; }
+                tab.update(cx, |t, cx| t.fork(e, cx));
+                Pith::global(cx).update(cx, |a, cx| { a.toast(Level::Info, "branched into a new session · edit and send", cx); a.refresh_sessions(cx); });
+            }
         };
-        let mut col = v_flex().gap_1().w(px(420.)).max_w_full()
-            .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).text_color(cx.theme().foreground).child(if design { "New design" } else { "New session" }))
-            .child(div().text_sm().text_color(p.dim).mb_4().child(tools::tilde(&t.cwd)));
-        for (i, (label, fill)) in starters.iter().enumerate() {
-            let (c, fill) = (self.composer.clone(), fill.to_string());
-            col = col.child(Button::new(("starter", i)).label(*label).ghost().small().justify_start()
-                .on_click(move |_, window, cx| c.update(cx, |c, cx| { c.set_text(&fill, window, cx); c.focus_handle(cx).focus(window, cx); })));
-        }
-        let key = |k: &str, what: &str| h_flex().gap_1().child(div().px_1().rounded(px(4.)).border_1().border_color(cx.theme().border).text_color(p.mid).child(k.to_string())).child(what.to_string());
-        let m = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+" };
-        col.child(h_flex().gap_4().mt_6().text_xs().text_color(p.dim).child(key(&format!("{m}K"), "commands")).child(key("!", "shell")).child(key("Esc", "stop")))
+        div().relative().group(group.clone()).flex().gap(u(4.)).pl(u(8.)).pr(u(12.)).py(u(8.)).rounded(u(g.r2)).bg(p.raised).border_l(u(2.)).border_color(p.primary)
+            .child(div().flex_none().w(u(18.)).text_color(p.primary).font_weight(FontWeight::BOLD).child("❯"))
+            .child(body)
+            .child(div().absolute().top(u(4.)).right(u(6.)).flex().gap(u(2.)).bg(p.raised).rounded(u(5.)).opacity(0.).group_hover(group, |s| s.opacity(1.))
+                .child(ia(format!("ucp{id}"), IconName::Copy, 24., "copy", cx).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_text.clone()))))
+                .when(entry_id.is_some(), |d| d.child(ia(format!("ubr{id}"), IconName::GitBranch, 24., "edit and branch from here", cx).on_click(edit))))
             .into_any_element()
     }
-}
 
-// what you sent: a bubble on the right, its images above the text, copy and edit under it on hover and in its menu
-#[allow(clippy::too_many_arguments)]
-fn user(id: u64, text: &str, typed: Option<&str>, images: &[crate::state::tab::Img], entry_id: Option<String>, running: bool, tab: &Entity<Tab>, cx: &App) -> AnyElement {
-    let shown = typed.unwrap_or(text).to_string();
-    let group = SharedString::from(format!("u{id}"));
-    let edit = {
-        let (tab, e) = (tab.clone(), entry_id.clone());
-        move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
-            let Some(e) = e.clone() else { return };
-            if tab.read(cx).running() {
-                Pith::global(cx).update(cx, |a, cx| a.toast(Level::Info, "Stop the run first, then edit", cx));
-                return;
-            }
-            tab.update(cx, |t, cx| t.fork(e, cx));
+    // .chat-empty: what kind of session, where, a few ways to start, and the keys
+    fn empty_state(&self, window: &Window, cx: &Context<Self>) -> Option<AnyElement> {
+        let p = pal(cx);
+        let g = geo(cx);
+        let t = self.tab.read(cx);
+        // a session off disk shows its history in a moment, not "new session"
+        if t.file.is_some() && matches!(t.status, Status::Starting | Status::Cold) { return None; }
+        let design = t.kind == Kind::Design;
+        let starters: &[(&str, &str)] = if design {
+            &[("/design ", "a landing page for…"), ("", "a settings screen for a music app, dark"), ("/image ", "an app icon for…")]
+        } else { &[("/review", ""), ("/explain ", "how … works"), ("/init", ""), ("/simplify", "")] };
+        let mut row = div().flex().flex_wrap().gap(u(8.)).mt(u(10.));
+        for (i, (cmd, rest)) in starters.iter().enumerate() {
+            let fill = format!("{cmd}{}", if rest.contains('…') { "" } else { rest });
+            let c = self.composer.clone();
+            let (hov, dim) = (p.hover, p.dim);
+            row = row.child(div().id(("starter", i)).flex().px(u(12.)).py(u(4.)).border(u(1.)).border_color(p.line).rounded(u(g.r2)).cursor_pointer()
+                .hover(move |s| s.bg(hov).border_color(dim))
+                .child(div().text_color(p.accent).child(if cmd.is_empty() { "❯ ".to_string() } else { cmd.to_string() }))
+                .child(div().text_color(p.dim).child(rest.to_string()))
+                .on_click(move |_, window, cx| c.update(cx, |c, cx| { c.set_text(&fill, window, cx); c.focus_handle(cx).focus(window, cx); })));
         }
-    };
-    let edit2 = edit.clone();
-    let copy = shown.clone();
-    let bubble = v_flex().id(SharedString::from(format!("ub{id}"))).max_w(relative(0.82)).gap_2().px_3p5().py_2().rounded(px(14.)).bg(cx.theme().muted).text_color(cx.theme().foreground)
-        .when(!images.is_empty(), |d| d.child(media::strip(images.iter().map(|i| (i.data.as_str(), i.mime.as_str())), px(96.), cx)))
-        .when(!shown.trim().is_empty(), |d| d.child(md::markdown(ElementId::Name(format!("u{id}").into()), md::typed(&shown), cx)))
-        .context_menu(move |menu, _, _| {
-            let (c, e) = (copy.clone(), edit2.clone());
-            menu.item(PopupMenuItem::new("Copy").icon(IconName::Copy).on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(c.clone()))))
-                .item(PopupMenuItem::new("Edit and resend from here").icon(IconName::Pencil).disabled(running).on_click(move |ev, w, cx| e(ev, w, cx)))
-        });
-    v_flex().w_full().items_end().gap_1().group(group.clone())
-        .child(bubble)
-        .child(h_flex().gap_0p5().opacity(0.).group_hover(group, |s| s.opacity(1.))
-            .child(Clipboard::new(SharedString::from(format!("ucopy{id}"))).value(shown).tooltip("Copy"))
-            .when(entry_id.is_some(), |d| d.child(Button::new(SharedString::from(format!("uedit{id}"))).icon(IconName::Pencil).ghost().xsmall()
-                .tooltip("Edit and resend from here").disabled(running).on_click(edit))))
-        .into_any_element()
+        let kbd = |k: &str, what: &str| div().flex().items_center().gap(u(4.))
+            .child(div().text_size(em(cx, 0.85 * 0.78)).line_height(relative(1.)).px(u(5.)).pt(u(2.)).pb(u(3.)).rounded(u(4.)).text_color(p.mid).bg(p.high).border_b(u(1.)).border_color(p.line).child(k.to_string()))
+            .child(what.to_string());
+        let top = f32::from(window.viewport_size().height) * 0.14 / g.scale.max(0.1);
+        Some(div().mt(u(top)).flex().flex_col().gap(u(10.))
+            .child(div().text_color(p.dim).text_size(em(cx, 0.85)).child(if design { "design session" } else { "new session" }))
+            .child(div().text_size(em(cx, 1.3)).text_color(p.text).child(tools::tilde(&t.cwd)))
+            .child(row)
+            .child(div().flex().flex_wrap().gap(u(18.)).mt(u(18.)).text_color(p.dim).text_size(em(cx, 0.85))
+                .child(kbd("shift+tab", "mode")).child(kbd("ctrl+k", "commands")).child(kbd("@", "files")).child(kbd("!", "shell")))
+            .into_any_element())
+    }
 }
 
-fn assistant(id: u64, a: &Assistant, last_of_turn: bool, ui: &Ui, tab: &Tab, cx: &App) -> AnyElement {
+fn pal_hover() -> Hsla { gpui_kit::hsla(0., 0., 1., 0.06) }
+
+// .tx-wrap: centred, at most 900 wide with 28 either side
+fn wrap(inner: Div, _cx: &App) -> AnyElement {
+    div().w_full().flex().justify_center().child(div().w_full().max_w(u(MAX_W)).px(u(SIDE)).child(inner)).into_any_element()
+}
+
+// .ia: a small icon button, dim until hovered
+fn ia(id: String, icon: IconName, size: f32, _title: &str, cx: &App) -> Stateful<Div> {
     let p = pal(cx);
-    let mut col = v_flex().w_full().gap_2();
-    let shown: Vec<(usize, &Block)> = a.blocks.iter().enumerate().filter_map(|(i, b)| b.as_ref().map(|b| (i, b))).collect();
-    for (k, (bi, b)) in shown.iter().enumerate() {
-        let tail = a.live && k + 1 == shown.len();
-        match b {
-            Block::Text(t) if !t.trim().is_empty() => {
-                col = col.child(md::markdown(ElementId::Name(format!("a{id}-{bi}").into()), t.clone(), cx).stream_fade(a.live));
+    let (txt, hov) = (p.text, p.hover);
+    div().id(SharedString::from(id)).flex_none().size(u(size)).flex().items_center().justify_center().rounded(u(5.)).text_color(p.dim).cursor_pointer()
+        .hover(move |s| s.text_color(txt).bg(hov)).child(Icon::new(icon).size(em(cx, 1.2)))
+}
+
+// an item's css margins (top, bottom) in px, with what its last child pushes through
+fn margins(tab: &Tab, ix: usize, last_of_turn: bool, ui: &Ui) -> (f32, f32) {
+    match &tab.items[ix].kind {
+        ItemKind::User { .. } => (26., 14.),
+        ItemKind::Assistant(a) => {
+            let mut b: f32 = 4.;
+            if a.error.is_some() && a.stop.as_deref() != Some("aborted") { b = b.max(8.); }
+            else if let Some(Some(Block::Tool(id))) = a.blocks.iter().rev().find(|b| b.is_some()) {
+                if ui.open.contains(id) { b = b.max(10.); }
             }
-            Block::Thinking { text, ms, redacted, .. } => {
-                let key = format!("th{id}-{bi}");
-                let open = ui.is_open(&key, false);
-                let live = tail && ms.is_none();
-                let label = match ms {
-                    Some(ms) => format!("Thought for {}", tools::dur(*ms)),
-                    None if live => "Thinking".into(),
-                    None if *redacted && text.is_empty() => "Thought, hidden by the provider".into(),
-                    None => "Thought".into(),
-                };
-                let can_open = !text.trim().is_empty();
-                let last: String = if live && !open { text.trim_end().lines().rev().filter(|l| !l.trim().is_empty()).take(2).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n") } else { String::new() };
-                col = col.child(
-                    v_flex().gap_1()
-                        .child(h_flex().id(SharedString::from(key.clone())).gap_1p5().items_center().text_sm().text_color(p.dim)
-                            .when(can_open, |d| d.cursor_pointer().hover(|s| s.text_color(cx.theme().foreground)).on_click(ui.on(key.clone(), false)))
-                            .when(live, |d| d.child(Spinner::new().xsmall().color(p.dim)))
-                            .when(!live, |d| d.child(Icon::new(IconName::Brain).xsmall()))
-                            .child(label)
-                            .when(can_open, |d| d.child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall())))
-                        .when(!last.is_empty(), |d| d.child(div().pl(px(22.)).text_sm().text_color(p.dim.opacity(0.8)).line_clamp(2).child(last)))
-                        .when(open && can_open, |d| d.child(
-                            div().ml(px(6.)).pl(px(15.)).border_l_1().border_color(p.hairline).text_sm().text_color(p.mid)
-                                .child(TextView::markdown(ElementId::Name(format!("t{id}-{bi}").into()), text.clone()).selectable(true).text_color(p.mid)),
-                        )),
-                );
-            }
-            Block::Tool(tid) => {
-                if let Some(tb) = tab.tools.get(tid) { col = col.child(tools::row(tb, ui, cx)); }
-            }
-            _ => {}
+            if footer(a, last_of_turn) { b = b.max(22.); }
+            (4., b)
         }
+        ItemKind::Bash { .. } => (14., 14.),
+        ItemKind::Compaction { .. } | ItemKind::Branch { .. } => (18., 18.),
+        ItemKind::Custom { .. } => (10., 10.),
+        ItemKind::Note { .. } => (6., 6.),
+    }
+}
+
+// live runs get their footer, ones off disk only what the message itself recorded
+fn footer(a: &Assistant, last_of_turn: bool) -> bool { a.run_ms.is_some() || (!a.live && a.stop.as_deref() == Some("stop") && last_of_turn) }
+
+#[derive(PartialEq, Clone, Copy)]
+enum BK { Prose, Think, Tool }
+
+fn assistant(id: u64, ix: usize, a: &Assistant, last_of_turn: bool, ui: &Ui, tab: &Tab, cx: &App) -> AnyElement {
+    let p = pal(cx);
+    let shown: Vec<(usize, &Block)> = a.blocks.iter().enumerate().filter_map(|(i, b)| b.as_ref().map(|b| (i, b)))
+        .filter(|(_, b)| !matches!(b, Block::Text(t) if t.trim().is_empty() && !a.live)).collect();
+    let mut col = div().flex().flex_col().w_full();
+    let mut prev: Option<BK> = None;
+    let mut prev_bottom = 0.;
+    for (k, (bi, b)) in shown.iter().enumerate() {
+        let last = a.live && k + 1 == shown.len();
+        let kind = match b { Block::Text(_) => BK::Prose, Block::Thinking { .. } => BK::Think, Block::Tool(_) => BK::Tool };
+        // .blocks spacing: 2px, more around prose
+        // the last block's bottom margin (an open body) collapses into this gap
+        let gap = match (prev, kind) { (None, _) => 0., (Some(BK::Prose), BK::Prose) => 8., (Some(BK::Tool | BK::Think), BK::Prose) => 10., (Some(BK::Prose), BK::Tool) => 8., _ => 2f32 }.max(if prev.is_some() { prev_bottom } else { 0. });
+        prev = Some(kind);
+        let (el, bottom): (AnyElement, f32) = match b {
+            Block::Text(t) => (md::prose(format!("a{id}-{bi}"), t, false, last, Some(ui.tab), cx).into_any_element(), 0.),
+            Block::Thinking { text, ms, redacted, .. } => thinking(format!("th{id}-{bi}"), text, *ms, *redacted, last && ms.is_none(), ui, cx),
+            Block::Tool(tid) => match tab.tools.get(tid) { Some(tb) => tools::row(tb, ui, cx), None => continue },
+        };
+        prev_bottom = bottom;
+        col = col.child(div().w_full().when(gap > 0., |d| d.mt(u(gap))).child(el));
     }
     if let Some(e) = a.error.as_ref().filter(|_| a.stop.as_deref() != Some("aborted")) {
-        col = col.child(h_flex().gap_2().items_start().px_3().py_2().rounded(cx.theme().radius).bg(p.red.opacity(0.08)).text_sm().text_color(p.red)
-            .child(div().flex_none().pt(px(3.)).child(Icon::new(IconName::CircleAlert).xsmall())).child(div().min_w_0().child(e.clone())));
+        // .aerr
+        col = col.child(div().mt(u(8.)).px(u(10.)).py(u(6.)).border_l(u(2.)).border_color(p.red).text_color(p.red).bg(p.del_bg).rounded_r(u(4.)).text_size(em(cx, 0.9))
+            .child(sel(SharedString::from(format!("ae{id}")), e.clone())));
     }
-    // the end of a turn: how long it took, what it cost, and the reply to copy
-    if !a.live && (a.run_ms.is_some() || (last_of_turn && a.stop.as_deref() == Some("stop"))) {
+    if footer(a, last_of_turn) {
         let reply = a.blocks.iter().flatten().filter_map(|b| if let Block::Text(t) = b { Some(t.as_str()) } else { None }).collect::<Vec<_>>().join("\n\n");
-        let u = &a.usage;
+        let u_ = &a.usage;
         let mut meta = vec![];
-        if let Some(ms) = a.run_ms { meta.push(format!("Worked for {}", tools::dur(ms))); }
         if let Some(m) = &a.model { meta.push(m.clone()); }
-        if let Some(c) = u["cost"]["total"].as_f64().filter(|c| *c > 0.) { meta.push(format!("${c:.3}")); }
-        col = col.child(h_flex().gap_1().items_center().text_xs().text_color(p.dim).mt_neg_1()
-            .when(!reply.trim().is_empty(), |d| d.child(Clipboard::new(SharedString::from(format!("acopy{id}"))).value(reply).tooltip("Copy reply")))
-            .child(meta.join("  ·  ")));
+        if let Some(ms) = a.run_ms { meta.push(tools::dur(ms)); }
+        if u_.is_object() { meta.push(format!("{}↑ {}↓", tools::tok(u_["input"].as_u64().unwrap_or(0) + u_["cacheRead"].as_u64().unwrap_or(0)), tools::tok(u_["output"].as_u64().unwrap_or(0)))); }
+        if let Some(c) = u_["cost"]["total"].as_f64().filter(|c| *c > 0.) { meta.push(tools::cost(c)); }
+        let group = SharedString::from(format!("tf{id}"));
+        let rule = || div().flex_1().min_w(u(20.)).child(tools::dashed(p.line));
+        // retry: branch from the prompt that started this turn and send it again
+        let tab_e = ui.tab.clone();
+        let retry = move |_: &ClickEvent, _: &mut Window, cx: &mut App| {
+            let t = tab_e.read(cx);
+            if t.running() { return; }
+            let Some((entry, text, images)) = t.items[..=ix.min(t.items.len().saturating_sub(1))].iter().rev().find_map(|i| match &i.kind {
+                ItemKind::User { text, typed, images, entry_id, .. } => Some((entry_id.clone(), typed.clone().unwrap_or(text.clone()), images.clone())),
+                _ => None,
+            }) else { return };
+            let Some(entry) = entry else { return };
+            tab_e.update(cx, |t, cx| t.retry(entry, text, images, cx));
+        };
+        col = col.child(div().group(group.clone()).mt(u(14.)).flex().items_center().gap(u(10.)).text_size(em(cx, 0.78)).text_color(p.dim)
+            .child(rule())
+            .child(div().whitespace_nowrap().child(meta.join(" · ")))
+            .when(!reply.trim().is_empty(), |d| d.child(ia(format!("tfc{id}"), IconName::Copy, 20., "copy reply", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.))
+                .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(reply.clone())))))
+            .child(ia(format!("tfr{id}"), IconName::RefreshCw, 20., "retry: branch from the prompt before this and send it again", cx).opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)).on_click(retry))
+            .child(rule()));
     }
     col.into_any_element()
 }
 
-// a rule across the transcript, with what it marks; the summary behind it on click
+// .think: ∴ and how long it thought; the whole of it on click, the last few lines while it streams
+fn thinking(key: String, text: &str, ms: Option<u64>, redacted: bool, live: bool, ui: &Ui, cx: &App) -> (AnyElement, f32) {
+    let p = pal(cx);
+    let open = ui.is_open(&key, false);
+    let label = if live { "thinking".to_string() } else if redacted && text.is_empty() { "thought (hidden by the provider)".into() }
+        else if let Some(ms) = ms { format!("thought for {}", tools::dur(ms)) } else { format!("thought · {} tokens", tools::tok((text.chars().count() as f64 / 4.).round() as u64)) };
+    let tail: String = if live && !open { text.lines().filter(|l| !l.trim().is_empty()).collect::<Vec<_>>().iter().rev().take(3).rev().cloned().collect::<Vec<_>>().join("\n") } else { String::new() };
+    let (mid, hov) = (p.mid, p.hover);
+    let rule = |d: Div| d.ml(u(22.)).pl(u(12.)).border_l(u(1.)).border_color(p.rule).italic();
+    // the tail's and the body's bottom margins push through to whatever comes next
+    let bottom = if open { 8. } else if !tail.is_empty() { 4. } else { 0. };
+    (div().w_full().text_size(em(cx, 0.9)).text_color(p.dim)
+        .child(div().flex().child(div().id(SharedString::from(key.clone())).flex().items_baseline().gap(u(8.)).pl(u(2.)).pr(u(8.)).py(u(1.)).rounded(u(4.)).italic().cursor_pointer()
+            .hover(move |s| s.text_color(mid).bg(hov)).on_click(ui.on(key.clone(), false))
+            .child(div().flex_none().w(u(12.)).flex().justify_center().not_italic().text_color(if live { p.accent } else { p.tertiary })
+                .child(if live { super::frame::spin(SharedString::from(format!("{key}-sp"))).into_any_element() } else { div().child("∴").into_any_element() }))
+            .child(label)))
+        .when(!tail.is_empty(), |d| d.child(rule(div()).mt(u(2.)).max_h(em(cx, 0.9 * 4.8)).overflow_hidden().text_color(p.dim.opacity(0.8)).child(tail)))
+        .when(open, |d| d.child(rule(div()).mt(u(4.)).max_h(u(420.)).id(SharedString::from(format!("{key}-b"))).overflow_y_scroll()
+            .child(md::prose(format!("{key}-md"), text, true, false, None, cx))))
+        .into_any_element(), bottom)
+}
+
+// .marker: a dashed rule across with what it marks; the summary behind it on click
 fn marker(key: String, label: String, summary: &str, ui: &Ui, cx: &App) -> AnyElement {
     let p = pal(cx);
     let open = ui.is_open(&key, false);
-    let has = !summary.trim().is_empty();
-    v_flex().gap_2()
-        .child(h_flex().id(SharedString::from(key.clone())).gap_3().items_center().text_xs().text_color(p.dim)
-            .when(has, |d| d.cursor_pointer().hover(|s| s.text_color(cx.theme().foreground)).on_click(ui.on(key.clone(), false)))
-            .child(div().h_px().flex_1().bg(p.hairline)).child(label)
-            .when(has, |d| d.child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).xsmall()))
-            .child(div().h_px().flex_1().bg(p.hairline)))
-        .when(open && has, |d| d.child(div().px_4().text_sm().text_color(p.mid)
-            .child(TextView::markdown(ElementId::Name(format!("{key}-sum").into()), summary.to_string()).selectable(true).text_color(p.mid))))
+    let rule = || div().flex_1().min_w(u(20.)).child(tools::dashed(p.line));
+    div().w_full().text_size(em(cx, 0.85)).text_color(p.dim)
+        .child(div().id(SharedString::from(key.clone())).flex().items_center().gap(u(12.)).cursor_pointer().on_click(ui.on(key.clone(), false))
+            .child(rule()).child(label).child(rule()))
+        .when(open && !summary.trim().is_empty(), |d| d.child(div().mt(u(10.)).text_size(em(cx, 0.85 * 1.05)).child(md::prose(format!("{key}-sum"), summary, true, false, None, cx))))
         .into_any_element()
 }
 
@@ -380,33 +506,38 @@ fn ask_card(ask: &Ask, view: &ChatView, cx: &Context<ChatView>) -> AnyElement {
 }
 
 impl Render for ChatView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = self.tab.read(cx);
         let p = pal(cx);
-        let status = tab.status;
-        let err = tab.error.clone();
         let empty = tab.items.is_empty();
-        let tab_e = self.tab.clone();
+        let running = tab.running();
         let weak = cx.weak_entity();
         let plan = dock::plan(&self.tab, self.plan_open, move |_, _, cx| { let _ = weak.update(cx, |v, cx| { v.plan_open = !v.plan_open; cx.notify(); }); }, cx);
         let queue = dock::queue(&self.tab, cx);
         let ask = tab.asks.first().map(|a| ask_card(a, self, cx));
+        let empty_el = if empty { self.empty_state(window, cx) } else { None };
+        // .jump: scrolled up while it runs, a way back down to the new output
+        let jump = (running && !self.list.is_following_tail()).then(|| {
+            let list = self.list.clone();
+            div().absolute().bottom(u(10.)).left_0().right_0().flex().justify_center().child(
+                div().id("jump").flex().items_center().gap(u(6.)).px(u(12.)).py(u(3.)).rounded(u(20.)).bg(p.high).border(u(1.)).border_color(p.line)
+                    .text_size(em(cx, 0.84)).text_color(p.text).cursor_pointer().shadow_md()
+                    .child(Icon::new(IconName::ArrowDown).size(em(cx, 0.84 * 1.2))).child("new output")
+                    .on_click(cx.listener(move |_, _, _, cx| { list.set_follow_mode(FollowMode::Tail); cx.notify(); })))
+        });
+        let bg = p.bg;
         v_flex().size_full().min_h_0()
             .child(
                 div().flex_1().min_h_0().relative()
-                    .when(empty && status != Status::Dead, |d| d.child(div().absolute().inset_0().flex().items_center().justify_center().px_6().child(self.empty_state(cx))))
-                    .child(list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_item(ix, window, cx))).size_full().pt_4().pb_2()),
+                    .child(list(self.list.clone(), cx.processor(|this, ix, window, cx| this.render_item(ix, window, cx))).size_full().pt(u(22.)))
+                    .when_some(empty_el, |d, e| d.child(div().absolute().top(u(22.)).left_0().right_0().child(wrap(div().child(e), cx))))
+                    // .chat-scroll's mask: the top 22px fade out
+                    .child(div().absolute().top_0().left_0().right_0().h(u(22.)).bg(linear_gradient(180., linear_color_stop(bg, 0.), linear_color_stop(bg.opacity(0.), 1.))))
+                    .children(jump),
             )
             .child(
-                h_flex().w_full().justify_center().px_6().pb_4().pt_1().child(
-                    v_flex().w_full().max_w(px(MAX_W)).gap_2()
-                        .child(self.working.clone())
-                        .when(status == Status::Dead, |d| d.child(
-                            v_flex().gap_2().p_3().rounded(cx.theme().radius_lg).border_1().border_color(p.red.opacity(0.4))
-                                .child(h_flex().gap_2().items_center().text_sm().text_color(p.red).child(Icon::new(IconName::CircleAlert).xsmall()).child("pi stopped"))
-                                .when(!err.is_empty(), |d| d.child(div().font_family(cx.theme().mono_font_family.clone()).text_xs().text_color(p.mid).child(err.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect::<String>())))
-                                .child(h_flex().child(Button::new("restart").label("Start again").small().outline().on_click(move |_, _, cx| tab_e.update(cx, |t, cx| { let _ = t.ensure(cx); })))),
-                        ))
+                h_flex().w_full().justify_center().pb(u(14.)).pt(u(4.)).child(
+                    v_flex().w_full().max_w(u(MAX_W)).px(u(SIDE)).gap_2()
                         .children(plan)
                         .children(queue)
                         .children(ask)
@@ -415,4 +546,3 @@ impl Render for ChatView {
             )
     }
 }
-

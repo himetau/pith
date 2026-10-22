@@ -21,6 +21,8 @@ portable-pty = "0.9"
 alacritty_terminal = "0.26"
 ureq = { version = "3", features = ["json"] }
 base64 = "0.22"
+# transcript markdown is drawn by hand off its syntax tree, see ui/transcript/md.rs
+markdown = "1.0.0"
 trash = "5"
 rand = "0.9"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

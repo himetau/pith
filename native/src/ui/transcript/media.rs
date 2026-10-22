@@ -1,7 +1,7 @@
 // Images in the transcript: what you attached, what a tool returned. decoded once, the list redraws them every frame
-use crate::ui::theme::pal;
+use crate::ui::theme::{pal, u};
+use gpui_kit::prelude::FluentBuilder as _;
 use base64::Engine as _;
-use gpui_kit::component::{h_flex, ActiveTheme};
 use gpui_kit::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -39,21 +39,24 @@ pub fn image(data: &str, mime: &str) -> Decoded {
     img
 }
 
-// at most `h` tall and a few times as wide, never scaled up, sized from the header: the list measures the row before the image
-// has loaded, so its height can't wait for it
-pub fn thumb(data: &str, mime: &str, h: Pixels, cx: &App) -> AnyElement {
+// at most `max_h` tall and `max_w` wide, never scaled up, sized from the header: the list measures the row before
+// the image has loaded, so its height can't wait for it. a click opens it in the lightbox (cursor: zoom-in)
+pub fn pic(id: impl Into<ElementId>, data: &str, mime: &str, max_h: f32, max_w: f32, radius: f32, border: bool, cx: &App) -> Stateful<Div> {
     let p = pal(cx);
+    let id = id.into();
     let Some((i, (w0, h0))) = image(data, mime) else {
-        return div().h(h).w(h).rounded(cx.theme().radius).bg(p.code_bg).into_any_element();
+        return div().id(id).h(u(max_h.min(84.))).w(u(max_h.min(84.))).rounded(u(radius)).bg(p.surface_low);
     };
-    let max_w = h * 2.4;
     let (w0, h0) = (w0.max(1) as f32, h0.max(1) as f32);
-    let scale = (h.as_f32() / h0).min(max_w.as_f32() / w0).min(1.);
-    div().flex_none().w(px(w0 * scale)).h(px(h0 * scale)).max_w_full().overflow_hidden().rounded(cx.theme().radius).border_1().border_color(p.hairline).bg(p.code_bg)
+    let scale = (max_h / h0).min(max_w / w0).min(1.);
+    let i2 = i.clone();
+    div().id(id).flex_none().w(u(w0 * scale)).h(u(h0 * scale)).max_w_full().overflow_hidden().rounded(u(radius))
+        .when(border, |d| d.border(u(1.)).border_color(p.line)).cursor(CursorStyle::PointingHand)
         .child(img(i).size_full().object_fit(ObjectFit::Contain))
-        .into_any_element()
+        .on_click(move |_, window, cx| { cx.stop_propagation(); crate::ui::lightbox::open(crate::ui::lightbox::Src::Image(i2.clone()), None, window, cx); })
 }
 
-pub fn strip<'a>(imgs: impl IntoIterator<Item = (&'a str, &'a str)>, h: Pixels, cx: &App) -> Div {
-    h_flex().flex_wrap().gap_2().children(imgs.into_iter().map(|(d, m)| thumb(d, m, h, cx)))
+// a row of them, wrapping (.uimgs, .tool-imgs, .gen-imgs)
+pub fn strip<'a>(key: &str, imgs: impl IntoIterator<Item = (&'a str, &'a str)>, max_h: f32, max_w: f32, radius: f32, border: bool, gap: f32, cx: &App) -> Div {
+    div().flex().flex_wrap().gap(u(gap)).children(imgs.into_iter().enumerate().map(|(n, (d, m))| pic(SharedString::from(format!("{key}-{n}")), d, m, max_h, max_w, radius, border, cx)))
 }

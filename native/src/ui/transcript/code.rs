@@ -205,3 +205,30 @@ pub fn edits(id: impl Into<SharedString>, edits: &[(String, String)], lang: Opti
     let copy = edits.iter().map(|e| e.1.as_str()).collect::<Vec<_>>().join("\n");
     diff_rows(id.into(), rows, lang, limit, copy, cx)
 }
+
+// a fence's language ("rs", "rust", "sh", "tsx") as tree-sitter's name
+pub fn fence_lang(lang: &str) -> Option<&'static str> {
+    let l = lang.to_ascii_lowercase();
+    match l.as_str() {
+        "" | "text" | "txt" | "plain" => None,
+        "rust" => Some("rust"), "typescript" => Some("typescript"), "javascript" | "js" | "jsx" => Some("javascript"), "python" | "py" => Some("python"),
+        "shell" | "sh" | "bash" | "zsh" | "console" | "fish" => Some("bash"), "json" | "jsonc" => Some("json"), "toml" => Some("toml"), "yaml" | "yml" => Some("yaml"),
+        "go" | "golang" => Some("go"), "c" => Some("c"), "cpp" | "c++" => Some("cpp"), "html" | "xml" | "svg" => Some("html"), "css" | "scss" => Some("css"),
+        "markdown" | "md" => Some("markdown"), "diff" | "patch" => Some("diff"),
+        e => lang_of(&format!("x.{e}")),
+    }
+}
+
+// the whole text with its colour runs, for one selectable block (code blocks, tool bodies)
+pub fn joined(text: &str, lang: Option<&str>, cx: &App) -> (SharedString, Runs) {
+    let ls = lines(text, lang, cx);
+    let mut out = String::with_capacity(text.len());
+    let mut runs = vec![];
+    for (i, l) in ls.iter().enumerate() {
+        if i > 0 { out.push('\n'); }
+        let at = out.len();
+        out.push_str(&l.text);
+        runs.extend(l.runs.iter().map(|(r, s)| (r.start + at..r.end + at, *s)));
+    }
+    (out.into(), runs)
+}

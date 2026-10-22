@@ -211,6 +211,10 @@ impl Pith {
         self.focus(tab, cx);
     }
 
+    // a subagent's session, from a link in the chat (its card in a tool row, a todo that matches its task).
+    // hook for the panes side: watching a live run instead of starting pi on it belongs here
+    pub fn open_agent_run(&mut self, file: &str, cx: &mut Context<Self>) { self.open(file, cx); }
+
     pub fn fresh(&mut self, cwd: String, kind: Kind, cx: &mut Context<Self>) -> Entity<Tab> {
         let tab = self.add(Tab::new(cwd, None, kind, self.mode_default(), None, self.spawner.clone()), cx);
         self.focus(tab.clone(), cx);

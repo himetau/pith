@@ -812,6 +812,28 @@ impl Tab {
         });
     }
 
+    // same prompt, fresh answer: branch from the prompt that started a turn and send it again (transcript.ts retry).
+    // the branch's history is in before the prompt goes, so the new run streams onto it
+    pub fn retry(&mut self, entry_id: String, text: String, images: Vec<Img>, cx: &mut Context<Self>) {
+        if self.running() { return; }
+        self.with_pi(json!({ "type": "fork", "entryId": entry_id }), cx, move |t, r, cx| {
+            if r["success"] != true || r["data"]["cancelled"] == true { t.note(Level::Error, r["error"].as_str().unwrap_or("fork was cancelled").to_string(), cx); return; }
+            let (st, en) = (t.cmd(json!({ "type": "get_state" })), t.cmd(json!({ "type": "get_entries" })));
+            cx.spawn(async move |this, cx| {
+                let (st, en) = futures::join!(st, en);
+                let _ = this.update(cx, |t, cx| {
+                    if st["success"] == true {
+                        t.state = st["data"].clone();
+                        if let Some(f) = t.state["sessionFile"].as_str() { t.file = Some(f.into()); }
+                        t.save_meta();
+                    }
+                    if en["success"] == true { t.todos.clear(); t.fill(&en["data"]["entries"], en["data"]["leafId"].as_str()); t.bump(cx); }
+                    t.send(text, images, How::Auto, cx);
+                });
+            }).detach();
+        });
+    }
+
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         let f = self.cmd(json!({ "type": "get_entries" }));
         cx.spawn(async move |this, cx| {
