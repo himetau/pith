@@ -159,8 +159,7 @@ impl Workspace {
     // panes.ts togglePane: the pane that's up closes, anything else opens
     fn toggle_pane(&mut self, pane: Pane, cx: &mut Context<Self>) {
         if self.app.read(cx).active.is_none() { return; }
-        let on = self.app.read(cx).side && self.side.as_ref().map(|s| s.read(cx).current()) == Some(pane);
-        if on { self.app.update(cx, |a, cx| { a.side = false; cx.notify(); }); } else { super::panes::open(pane, cx); }
+        super::panes::toggle(pane, cx);
     }
 
     // look.ts stepScale: the next stop up or down, or back to 1
@@ -392,8 +391,7 @@ impl Workspace {
             return (legend(Side::L, gutter, cx).child(legend_t(name, focused, cx)), None);
         };
         let (title, cwd, design) = { let t = t.read(cx); (t.title(), super::tools::tilde(&t.cwd), t.kind == Kind::Design) };
-        let side_open = app.side;
-        let cur = self.side.as_ref().map(|s| s.read(cx).current());
+        let cur = t.read(cx).pane;
         let t1 = t.clone();
         let l = legend(Side::L, gutter, cx).max_w(relative(1.)).mr(u(210.))
             .when(design, |d| d.child(legend_tag("design", cx)))
@@ -405,11 +403,11 @@ impl Workspace {
         let t2 = t.clone();
         let r = legend(Side::R, gutter, cx)
             .children(PANES.into_iter().map(|(pane, label, icon, keys)| {
-                let on = side_open && cur == Some(pane);
+                let on = cur == Some(pane);
                 let tip = format!("{label} ({keys})");
                 legend_btn(SharedString::from(format!("lp-{label}")), on, cx).px(u(4.)).tip(tip, cx)
                     .child(ic(icon).size(fsz))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_pane(pane, cx)))
+                    .on_click(move |_, _, cx| super::panes::toggle(pane, cx))
             }))
             .child(legend_btn("lp-more", false, cx).px(u(4.)).tip("more", cx).child(ic("more").size(fsz))
                 .on_mouse_down(MouseButton::Left, move |e, _, cx| { cx.stop_propagation(); session_menu(&t2, e.position, cx) }));
@@ -548,7 +546,8 @@ impl Workspace {
             row = row.child(super::frame::win(cx).id("win-pane").w(u(side_w)).flex_none()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, cx| { if this.focus_win != 2 { this.focus_win = 2; cx.notify(); } }))
                 .child(div().flex_1().min_h_0().flex().flex_col().overflow_hidden().rounded(u(g.round)).child(side))
-                .child(super::frame::edge(super::frame::win_color(fw == 2, cx), cx)));
+                .child(super::frame::edge(super::frame::win_color(fw == 2, cx), cx))
+                .map(|d| { let (l, r) = SidePanel::legends(cx); d.child(l).child(r) }));
         }
         div().flex().flex_col().flex_1().min_h_0().gap(u(g.gap)).child(row).child(div().h(u(26.)).flex_none().child(self.status.clone()))
     }

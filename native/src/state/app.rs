@@ -41,7 +41,7 @@ pub struct Pith {
     pub home_cwd: String,
     pub home_kind: Kind,
     pub sidebar: bool,
-    // the panel on the right, its width in window pixels
+    // the side window: whether it's open, mirroring the active session's own pane (Tab::pane), and its width in window pixels
     pub side: bool,
     pub side_w: f32,
     spawner: Spawner,
@@ -130,12 +130,14 @@ impl Pith {
             }
         });
         cx.set_global(Global_(pith));
+        super::hub::Hub::init(cx);
     }
 
     fn route(&mut self, msg: Msg, cx: &mut Context<Self>) {
         let id = match &msg { Msg::Rec(t, _) | Msg::Exit(t, _, _) | Msg::Preview(t, _) | Msg::Browser(t) => t.clone() };
         let Some(tab) = self.tabs.iter().find(|t| t.read(cx).id == id).cloned() else { return };
         let opens = matches!(msg, Msg::Preview(..) | Msg::Browser(_)) && self.active.as_ref() == Some(&tab);
+        use crate::ui::panes::Pane;
         match msg {
             Msg::Rec(_, rec) => {
                 let background = self.active.as_ref() != Some(&tab) || self.view != View::Chat;
@@ -151,15 +153,12 @@ impl Pith {
             Msg::Exit(_, code, err) => tab.update(cx, |t, cx| t.exited(code, err, cx)),
             // the agent opened a page: the panel shows it, the way the agent sees it
             Msg::Preview(_, args) => tab.update(cx, |t, cx| {
-                crate::ui::panes::request(crate::ui::panes::Pane::Preview);
+                t.pane = Some(Pane::Preview);
                 crate::core::preview::show(&t.id, args["path"].as_str(), args["url"].as_str());
                 t.preview = Some(args);
                 cx.emit(TabEvent::Preview);
             }),
-            Msg::Browser(_) => {
-                crate::ui::panes::request(crate::ui::panes::Pane::Browser);
-                tab.update(cx, |_, cx| cx.emit(TabEvent::Browser));
-            }
+            Msg::Browser(_) => tab.update(cx, |t, cx| { t.pane = Some(Pane::Browser); t.driving = true; cx.emit(TabEvent::Browser); }),
         }
         if opens { self.side = true; }
         cx.notify();
@@ -185,9 +184,12 @@ impl Pith {
         tab.update(cx, |t, cx| {
             t.unread = false;
             t.last_used = Instant::now();
-            if t.status == super::tab::Status::Cold { let _ = t.ensure(cx); }
+            // a watched subagent run is read off disk, its own process has it
+            if t.watch { t.peek(cx); }
+            else if t.status == super::tab::Status::Cold { let _ = t.ensure(cx); }
             cx.notify();
         });
+        self.side = tab.read(cx).pane.is_some();
         self.active = Some(tab);
         self.view = View::Chat;
         cx.emit(AppEvent::Focus);
@@ -212,6 +214,41 @@ impl Pith {
             let _ = weak.update(cx, |t, cx| t.fill_from_disk(&d, cx));
         }).detach();
         self.focus(tab, cx);
+    }
+
+    // a subagent's run as its own tab you can watch, and carry on in once it's done (app.openAgent)
+    pub fn open_agent(&mut self, run: super::hub::AgentRun, cx: &mut Context<Self>) -> Entity<Tab> {
+        if let Some(t) = self.tabs.iter().find(|t| t.read(cx).file.as_deref() == Some(run.file.as_str())).cloned() { self.focus(t.clone(), cx); return t; }
+        let cwd = if run.cwd.is_empty() { self.active.as_ref().map(|t| t.read(cx).cwd.clone()).unwrap_or_else(|| self.home_cwd.clone()) } else { run.cwd.clone() };
+        let name = format!("{} · {}", run.agent, super::tab::title_from(&run.task));
+        let mut t = Tab::new(cwd, Some(run.file.clone()), Kind::Chat, self.mode_default(), Some(name), self.spawner.clone());
+        t.watch = true;
+        t.agent_running = run.running;
+        // keep whatever side pane you opened it from, usually the agents list
+        t.pane = self.active.as_ref().and_then(|a| a.read(cx).pane);
+        let tab = self.add(t, cx);
+        self.focus(tab.clone(), cx);
+        tab
+    }
+
+    // a subagent run by what's known about it, ready to open; None when it has no session to show
+    #[allow(dead_code)]
+    pub fn agent_run(&self, q: &super::hub::AgentRef, cx: &App) -> Option<super::hub::AgentRun> {
+        let mut run = super::hub::Hub::global(cx).read(cx).find(q)?;
+        if run.cwd.is_empty() { run.cwd = self.active.as_ref().map(|t| t.read(cx).cwd.clone()).unwrap_or_else(|| self.home_cwd.clone()); }
+        Some(run)
+    }
+
+    // the side window for one session: open on a pane, or closed with None (t.pane / act.openPane)
+    pub fn set_pane(&mut self, tab: &Entity<Tab>, pane: Option<crate::ui::panes::Pane>, cx: &mut Context<Self>) {
+        tab.update(cx, |t, cx| { t.pane = pane; cx.notify(); });
+        if self.active.as_ref() == Some(tab) { self.side = pane.is_some(); }
+        cx.notify();
+    }
+    // act.togglePane: the pane that's open closes, any other opens
+    pub fn toggle_pane(&mut self, tab: &Entity<Tab>, pane: crate::ui::panes::Pane, cx: &mut Context<Self>) {
+        let next = if tab.read(cx).pane == Some(pane) { None } else { Some(pane) };
+        self.set_pane(tab, next, cx);
     }
 
     pub fn fresh(&mut self, cwd: String, kind: Kind, cx: &mut Context<Self>) -> Entity<Tab> { let m = self.mode_default(); self.fresh_in(cwd, kind, m, cx) }

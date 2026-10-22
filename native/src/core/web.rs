@@ -113,7 +113,9 @@ mod linux {
 
     pub fn resize(id: &str, w: i32, h: i32) {
         let id = id.to_string();
-        post(move || VIEWS.with(|v| { if let Some((win, view)) = v.borrow().get(&id) { view.set_size_request(w.max(200), h.max(200)); win.resize(w.max(200), h.max(200)); } }));
+        let (w, h) = (w.max(200), h.max(200));
+        // an offscreen window never shrinks below its default size, so that moves too
+        post(move || VIEWS.with(|v| { if let Some((win, view)) = v.borrow().get(&id) { view.set_size_request(w, h); win.set_default_size(w, h); win.resize(w, h); } }));
     }
 
     pub fn go(id: &str, what: &str) {

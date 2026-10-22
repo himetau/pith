@@ -178,6 +178,17 @@ pub struct Tab {
     pub preview: Option<Value>,
     // when you last sent something (ms), which is what orders the sidebar. a new session counts from when it was made
     pub sent: f64,
+    // the side window: the pane open for this session, None when it's closed
+    pub pane: Option<crate::ui::panes::Pane>,
+    // where the web pane goes first when nothing's there yet, and what its url bar shows
+    pub browser_url: String,
+    // the agent is using the browser right now ("agent is driving")
+    pub driving: bool,
+    // a subagent's session: read off disk while its own process runs it, a normal session once you type in it
+    pub watch: bool,
+    pub agent_running: bool,
+    peeking: bool,
+    peek_again: bool,
     // bumps on every transcript change, the chat view re-measures when it moves
     pub version: u64,
     proc: Option<Arc<PiProc>>,
@@ -197,7 +208,8 @@ impl Tab {
             items: vec![], tools: HashMap::new(), state: json!({}), levels: vec![], stats: Value::Null,
             queue: (vec![], vec![]), asks: vec![], widgets: vec![], widgets_below: Default::default(), statuses: vec![], commands: vec![], todos: vec![],
             unread: false, error: String::new(), compacting: false, retry: None, run_start: None, last_used: Instant::now(),
-            preview: None, sent, version: 0, proc: None, spawner, starting: None, typed: vec![], live: None, loaded: false,
+            preview: None, sent, pane: None, browser_url: String::new(), driving: false, watch: false, agent_running: false, peeking: false, peek_again: false,
+            version: 0, proc: None, spawner, starting: None, typed: vec![], live: None, loaded: false,
         }
     }
 
@@ -232,6 +244,10 @@ impl Tab {
         self.last_used = Instant::now();
         if matches!(self.status, Status::Idle | Status::Running) { return Task::ready(true).shared(); }
         if let Some(t) = &self.starting { return t.clone(); }
+        if self.watch && self.agent_running {
+            self.note(Level::Info, "this agent is still running in its own process. once it's done you can carry on here", cx);
+            return Task::ready(false).shared();
+        }
         self.status = Status::Starting;
         self.error.clear();
         cx.notify();
@@ -259,6 +275,7 @@ impl Tab {
                 // history goes in before anyone can send, a load landing after a live message would wipe it
                 if let Some(r) = &entries { if r["success"] == true { t.fill(&r["data"]["entries"], r["data"]["leafId"].as_str()); } }
                 t.loaded = true;
+                t.watch = false;
                 t.status = if t.state["isStreaming"] == true { Status::Running } else { Status::Idle };
                 t.starting = None;
                 t.bump(cx);
@@ -332,6 +349,24 @@ impl Tab {
         self.fill(&d["entries"], d["leafId"].as_str());
         self.loaded = false;
         self.bump(cx);
+    }
+
+    // re-reads a watched subagent session off disk; calls landing mid-read fold into one more read after it
+    pub fn peek(&mut self, cx: &mut Context<Self>) {
+        let Some(file) = self.file.clone().filter(|_| self.watch) else { return };
+        if self.peeking { self.peek_again = true; return; }
+        self.peeking = true;
+        cx.spawn(async move |this, cx| loop {
+            let f = file.clone();
+            let d = cx.background_spawn(async move { crate::core::sys::agent_session(&f) }).await;
+            let again = this.update(cx, |t, cx| {
+                if t.watch { t.fill(&d["entries"], d["leafId"].as_str()); t.loaded = false; t.bump(cx); }
+                let again = std::mem::take(&mut t.peek_again);
+                if !again { t.peeking = false; }
+                again
+            });
+            if !matches!(again, Ok(true)) { break; }
+        }).detach();
     }
 
     // entries, not messages: messages stop at the last compaction, entries keep everything on the branch
@@ -500,12 +535,14 @@ impl Tab {
                     else if let Some(st) = tb.started { tb.ms = Some(st.elapsed().as_millis() as u64); }
                     tb.partial = None;
                 }
+                if r["toolName"] == "browser" { self.driving = false; }
                 cx.emit(TabEvent::ToolDone(s(&r["toolName"])));
                 self.bump(cx);
             }
             "turn_end" => self.refresh_stats(cx),
             "agent_settled" => {
                 self.status = Status::Idle;
+                self.driving = false;
                 self.retry = None;
                 let aborted = r["aborted"] == true;
                 if let Some(st) = self.run_start.take() {
