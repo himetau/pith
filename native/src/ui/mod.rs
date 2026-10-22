@@ -10,5 +10,6 @@ pub mod picker;
 pub mod settings;
 pub mod theme;
 pub mod tools;
+pub mod transcript;
 pub mod usage;
 pub mod workspace;

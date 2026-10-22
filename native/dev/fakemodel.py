@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 # a stand-in for an openai-compatible chat completions endpoint, so pith can be driven end to end with no real model.
 # scripted by the last user message:
+#   contains "preview" -> the preview tool shows the path in the message
 #   contains "browse" -> the browser tool navigates to the url in the message
 #   contains "tool"  -> a bash tool call (ls), then a markdown summary once the result comes back
 #   contains "long"  -> a long markdown reply with a code block and a table, streamed slowly
+#   contains "slow"  -> a bash call that prints a line every half second, for the live tail and the working line
+#   contains "edit"  -> an edit of notes.txt (run.sh creates it), so pi sends back a real diff
+#   contains "read"  -> a read of notes.txt
+#   contains "write" -> a write of hello.py
+#   contains "ponder" -> a long stretch of reasoning streamed slowly, then a short reply
 #   anything else    -> reasoning, then a short markdown reply
 import json, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -29,6 +35,15 @@ let list = cx.background_spawn(async { sessions::list_sessions() }).await;
 
 That's it — `cargo build` and run it again.
 """
+
+SCRIPTED = [
+    ("slow", "bash", {"command": "for i in $(seq 1 12); do echo \"step $i of 12\"; sleep 0.5; done"}),
+    ("edit", "edit", {"path": "notes.txt", "edits": [{"oldText": "hello", "newText": "hello\nworld, from the fake model"}]}),
+    ("read", "read", {"path": "notes.txt"}),
+    ("write", "write", {"path": "hello.py", "content": "import sys\n\n\ndef main():\n    # say hello to whoever is there\n    print(f\"hello {sys.argv[1:] or 'world'}\")\n\n\nif __name__ == \"__main__\":\n    main()\n"}),
+]
+
+PONDER = " ".join(["The user wants a careful answer, so I should weigh the options one by one before replying."] * 12)
 
 def chunks(text, n=6):
     words = text.split(" ")
@@ -71,10 +86,26 @@ class H(BaseHTTPRequestHandler):
             url = next((w for w in text.split() if "://" in w or w.startswith("/")), "about:blank")
             self.send({"tool_calls": [{"index": 0, "id": "call_b", "type": "function", "function": {"name": "browser", "arguments": json.dumps({"action": "navigate", "url": url})}}]})
             self.send({}, "tool_calls")
+        elif (scripted := next(((n, a) for k, n, a in SCRIPTED if k in text), None)) and not after_tool:
+            name, args = scripted
+            for c in chunks("On it.", 3):
+                self.send({"content": c}); time.sleep(slow)
+            # ids have to differ between turns, pi keys tool calls by them
+            self.send({"tool_calls": [{"index": 0, "id": f"call_{time.time_ns()}", "type": "function", "function": {"name": name, "arguments": ""}}]})
+            a = json.dumps(args)
+            for i in range(0, len(a), 12):
+                self.send({"tool_calls": [{"index": 0, "function": {"arguments": a[i:i + 12]}}]}); time.sleep(slow)
+            self.send({}, "tool_calls")
+        elif "ponder" in text and not after_tool:
+            for c in chunks(PONDER, 3):
+                self.send({"reasoning_content": c}); time.sleep(0.08)
+            for c in chunks("Done thinking. The short answer is **yes**."):
+                self.send({"content": c}); time.sleep(slow)
+            self.send({}, "stop")
         elif "tool" in text and not after_tool:
             for c in chunks("Let me look at the folder first.", 3):
                 self.send({"content": c}); time.sleep(slow)
-            self.send({"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "bash", "arguments": ""}}]})
+            self.send({"tool_calls": [{"index": 0, "id": f"call_{time.time_ns()}", "type": "function", "function": {"name": "bash", "arguments": ""}}]})
             for part in ['{"command": ', '"ls -la"', '}']:
                 self.send({"tool_calls": [{"index": 0, "function": {"arguments": part}}]}); time.sleep(slow)
             self.send({}, "tool_calls")
