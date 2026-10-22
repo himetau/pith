@@ -84,7 +84,8 @@ pub fn open_path(path: &str, line: Option<usize>, cx: &mut App) {
 
 fn inline(n: &Node, f: u8, out: &mut Inl) {
     match n {
-        Node::Text(t) => out.push(&t.value, f),
+        // a soft line break is a space, like html
+        Node::Text(t) => out.push(&t.value.replace("\r\n", " ").replace(['\n', '\r'], " "), f),
         Node::Strong(x) => x.children.iter().for_each(|c| inline(c, f | STRONG, out)),
         Node::Emphasis(x) => x.children.iter().for_each(|c| inline(c, f | EM, out)),
         Node::Delete(x) => x.children.iter().for_each(|c| inline(c, f | DEL, out)),
@@ -140,6 +141,8 @@ thread_local! {
     static CACHE: RefCell<HashMap<u64, Rc<Vec<Blk>>>> = RefCell::new(HashMap::new());
     static COPIED: RefCell<HashMap<String, Instant>> = RefCell::new(HashMap::new());
     static CH: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
+    // drawing a plain (non-.prose) document: findings' detail and fix have .2em paragraphs
+    static PLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn parse(text: &str) -> Rc<Vec<Blk>> {
@@ -166,8 +169,16 @@ pub fn ch(cx: &App) -> f32 {
 }
 
 // how a run of inline flags looks
-fn style(f: u8, p: &Pal) -> HighlightStyle {
+fn style(f: u8, p: &Pal, plain: bool) -> HighlightStyle {
     let mut s = HighlightStyle::default();
+    // outside .prose only the browser's bold, italics and strike apply
+    if plain {
+        if f & STRONG != 0 { s.font_weight = Some(FontWeight::BOLD); }
+        if f & EM != 0 { s.font_style = Some(FontStyle::Italic); }
+        if f & DEL != 0 { s.strikethrough = Some(StrikethroughStyle { thickness: px(1.), color: None }); }
+        if f & LINK != 0 { s.color = Some(p.accent); s.underline = Some(UnderlineStyle { thickness: px(1.), color: None, wavy: false }); }
+        return s;
+    }
     if f & STRONG != 0 { s.color = Some(p.md_strong); s.font_weight = Some(FontWeight::BOLD); }
     if f & EM != 0 { s.font_style = Some(FontStyle::Italic); if f & STRONG == 0 { s.color = Some(p.md_em); } }
     if f & CODE != 0 { s.color = Some(p.md_code); }
@@ -179,12 +190,12 @@ fn style(f: u8, p: &Pal) -> HighlightStyle {
 
 // what's needed to draw one document
 #[derive(Clone)]
-pub struct Ctx { pub pal: Pal, pub tab: Option<Entity<Tab>>, pub caret: bool }
+pub struct Ctx { pub pal: Pal, pub tab: Option<Entity<Tab>>, pub caret: bool, pub plain: bool }
 
-fn runs(i: &Inl, p: &Pal) -> Vec<(Range<usize>, HighlightStyle)> { i.segs.iter().map(|(r, f)| (r.clone(), style(*f, p))).collect() }
+fn runs(i: &Inl, c: &Ctx) -> Vec<(Range<usize>, HighlightStyle)> { i.segs.iter().map(|(r, f)| (r.clone(), style(*f, &c.pal, c.plain))).collect() }
 
-fn clicks(i: &Inl) -> Vec<(Range<usize>, OnClick)> {
-    i.targets.iter().map(|(r, t)| {
+fn clicks(i: &Inl, plain: bool) -> Vec<(Range<usize>, OnClick)> {
+    i.targets.iter().filter(|(_, t)| !plain || matches!(t, Target::Url(_))).map(|(r, t)| {
         let f: OnClick = match t.clone() {
             Target::Path(p) => Rc::new(move |_, cx| { let (p, l) = split_line(&p); open_path(&p, l, cx); }),
             Target::Url(u) => Rc::new(move |_, cx| cx.open_url(&u)),
@@ -194,13 +205,14 @@ fn clicks(i: &Inl) -> Vec<(Range<usize>, OnClick)> {
 }
 
 fn text_el(id: String, i: &Inl, c: &Ctx, caret: bool) -> AnyElement {
-    sel(SharedString::from(id), i.text.clone()).runs(runs(i, &c.pal)).clicks(clicks(i)).caret(caret.then_some(c.pal.primary)).into_any_element()
+    sel(SharedString::from(id), i.text.clone()).runs(runs(i, c)).clicks(clicks(i, c.plain)).caret(caret.then_some(c.pal.primary)).into_any_element()
 }
 
 // margins in px, top and bottom, collapsing like css: a container takes its first and last child's when bigger
 fn margins(b: &Blk, tight: bool, fs: f32) -> (f32, f32) {
     match b {
         Blk::P(_) if tight => (0., 0.),
+        Blk::P(_) if PLAIN.with(|p| p.get()) => (0.2 * fs, 0.2 * fs),
         Blk::P(_) => (0.55 * fs, 0.55 * fs),
         Blk::H(d, _) => (1.1 * fs * hsize(*d), 0.4 * fs * hsize(*d)),
         Blk::Code { .. } => (0.7 * fs, 0.7 * fs),
@@ -239,7 +251,7 @@ fn block(id: &str, b: &Blk, c: &Ctx, caret: bool, fs: f32, cx: &App) -> AnyEleme
             let half = ch(cx) * fs * hsize(*d) * 0.5;
             div().flex().text_size(u(fs * hsize(*d))).line_height(relative(1.3)).font_weight(FontWeight::BOLD).text_color(p.md_head)
                 .when(!mark.is_empty(), |d| d.child(div().flex_none().mr(u(half)).font_weight(FontWeight::NORMAL).text_color(p.md_head.opacity(0.45)).child(mark)))
-                .child(div().flex_1().min_w_0().child(sel(SharedString::from(id.to_string()), i.text.clone()).runs(runs(i, p)).clicks(clicks(i)).caret((caret && c.caret).then_some(p.primary))))
+                .child(div().flex_1().min_w_0().child(sel(SharedString::from(id.to_string()), i.text.clone()).runs(runs(i, c)).clicks(clicks(i, c.plain)).caret((caret && c.caret).then_some(p.primary))))
                 .into_any_element()
         }
         Blk::Code { lang, text } => code_block(id, lang, text, c, caret, fs, cx),
@@ -342,15 +354,26 @@ pub fn prose(id: impl Into<SharedString>, text: &str, quiet: bool, caret: bool, 
     let g = geo(cx);
     let id: SharedString = id.into();
     let bs = parse(text);
-    let c = Ctx { pal: p, tab: tab.cloned(), caret };
+    let c = Ctx { pal: p, tab: tab.cloned(), caret, plain: false };
     let fs = g.fs;
     let body = if bs.is_empty() && caret { div().child(sel(SharedString::from(format!("{id}.c")), "").caret(Some(c.pal.primary))) } else { flow(&id, &bs, &c, false, true, fs, cx) };
     div().w_full().min_w_0().font_family(g.prose.clone()).line_height(relative(1.66)).child(body)
 }
 
+// markdown outside .prose (a finding's detail and fix): the reading font, but none of the colours, paths stay text
+pub fn plain(id: impl Into<SharedString>, text: &str, cx: &App) -> Div {
+    let g = geo(cx);
+    let id: SharedString = id.into();
+    let c = Ctx { pal: pal(cx), tab: None, caret: false, plain: true };
+    PLAIN.with(|p| p.set(true));
+    let body = flow(&id, &parse(text), &c, false, false, g.fs, cx);
+    PLAIN.with(|p| p.set(false));
+    div().w_full().min_w_0().font_family(g.prose.clone()).child(body)
+}
+
 // one line of markdown without the paragraph (titles, summaries)
 pub fn inline_text(id: impl Into<SharedString>, text: &str, cx: &App) -> AnyElement {
     let bs = parse(text);
-    let c = Ctx { pal: pal(cx), tab: None, caret: false };
+    let c = Ctx { pal: pal(cx), tab: None, caret: false, plain: true };
     match bs.first() { Some(Blk::P(i)) | Some(Blk::H(_, i)) => text_el(id.into().to_string(), i, &c, false), _ => sel(id.into(), text.to_string()).into_any_element() }
 }

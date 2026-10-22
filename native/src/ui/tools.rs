@@ -119,9 +119,9 @@ enum Body { None, Read, Write, Edit, Bash, Output, Browser, Image, Ask, Todos, F
 
 struct Desc { verb: String, verb_c: Hsla, bold: bool, target: Line, meta: Vec<AnyElement>, auto: bool, body: Body }
 
-fn mini(id: String, label: &str, p: &Pal) -> Stateful<Div> {
+fn mini(id: String, label: &str, size: Rems, p: &Pal) -> Stateful<Div> {
     let (txt, hov) = (p.text, p.hover);
-    div().id(SharedString::from(id)).px(u(7.)).rounded(u(4.)).border(u(1.)).border_color(p.line).text_color(p.mid).cursor_pointer().whitespace_nowrap()
+    div().id(SharedString::from(id)).text_size(size).px(u(7.)).rounded(u(4.)).border(u(1.)).border_color(p.line).text_color(p.mid).cursor_pointer().whitespace_nowrap()
         .hover(move |s| s.text_color(txt).bg(hov)).child(label.to_string())
 }
 
@@ -189,7 +189,7 @@ fn describe(tb: &ToolBlock, ui: &Ui, cx: &App) -> Desc {
             if path.is_empty() { t.push(if url.is_empty() { "…" } else { &url }, None); } else { t.path(&path, None, "", &p); }
             // a preview row's one action: put it back in the side pane
             let (tab, args) = (ui.tab.clone(), tb.args.clone());
-            let show = mini(format!("show-{}", tb.id), "show", &p).on_click(move |_, _, cx| {
+            let show = mini(format!("show-{}", tb.id), "show", em(cx, 0.9 * 0.92 * 0.8), &p).on_click(move |_, _, cx| {
                 cx.stop_propagation();
                 tab.update(cx, |t, cx| {
                     let mut a = args.clone();
@@ -491,21 +491,22 @@ fn findings(tb: &ToolBlock, ui: &Ui, cx: &App) -> AnyElement {
         let tab = ui.tab.clone();
         let mut loc = Line::default();
         loc.path(&file, line, &line.map(|l| format!(":{l}")).unwrap_or_default(), &p);
-        let fix = mini(format!("{}-fix{i}", tb.id), "fix this", &p).on_click(move |_, _, cx| {
+        let fix = mini(format!("{}-fix{i}", tb.id), "fix this", em(cx, 0.9 * 0.8), &p).on_click(move |_, _, cx| {
             let label = if ask.chars().count() > 140 { format!("{}…", ask.chars().take(140).collect::<String>()) } else { ask.clone() };
             tab.update(cx, |_, cx| cx.emit(TabEvent::Quote { label, text: ask.clone() }));
         });
         col = col.child(div().relative().border(u(1.)).border_color(p.line).rounded(u(g.r2)).pl(u(12.)).pr(u(12.)).py(u(8.)).bg(p.surface_low).overflow_hidden()
             // the inset 3px severity edge
             .when_some(sc, |d, c| d.child(div().absolute().left_0().top_0().bottom_0().w(u(3.)).bg(c)))
-            .child(div().flex().items_baseline().gap(u(10.))
+            // panes.css's .f-head (the files pane's bar) lands on these too: a padded bar with a rule under it, .88em
+            .child(div().flex().items_center().gap(u(4.)).pl(u(12.)).pr(u(8.)).py(u(4.)).border_b(u(1.)).border_color(p.rule).text_size(em(cx, 0.9 * 0.88))
                 .child(div().text_color(p.dim).child(format!("{:02}", i + 1)))
-                .child(div().text_size(em(cx, 0.9 * 0.8)).px(u(6.)).rounded(u(3.)).bg(p.high).when_some(sc.filter(|_| sev != "low"), |d, c| d.text_color(c)).child(sev.clone()))
-                .when_some(f["category"].as_str(), |d, c| d.child(div().text_color(p.dim).text_size(em(cx, 0.9 * 0.85)).child(c.to_string())))
+                .child(div().text_size(em(cx, 0.9 * 0.88 * 0.8)).px(u(6.)).rounded(u(3.)).bg(p.high).when_some(sc.filter(|_| sev != "low"), |d, c| d.text_color(c)).child(sev.clone()))
+                .when_some(f["category"].as_str(), |d, c| d.child(div().text_color(p.dim).text_size(em(cx, 0.9 * 0.88 * 0.85)).child(c.to_string())))
                 .child(div().min_w_0().text_color(p.text).font_weight(FontWeight::BOLD).child(md::inline_text(format!("{}-ti{i}", tb.id), &title, cx))))
             .child(div().mt(u(2.)).mb(u(4.)).text_color(p.cyan).text_size(em(cx, 0.9 * 0.9)).child(loc.el(format!("{}-loc{i}", tb.id))))
-            .when_some(f["detail"].as_str(), |d, t| d.child(div().text_color(p.mid).child(md::prose(format!("{}-f{i}", tb.id), t, false, false, None, cx))))
-            .when_some(f["fix"].as_str(), |d, t| d.child(div().mt(u(4.)).flex().gap(u(6.)).text_color(p.mid).child(div().flex_none().text_color(p.dim).child("fix ")).child(md::prose(format!("{}-x{i}", tb.id), t, false, false, None, cx))))
+            .when_some(f["detail"].as_str(), |d, t| d.child(div().text_color(p.mid).child(md::plain(format!("{}-f{i}", tb.id), t, cx))))
+            .when_some(f["fix"].as_str(), |d, t| d.child(div().mt(u(4.)).flex().gap(u(6.)).text_color(p.mid).child(div().flex_none().text_color(p.dim).child("fix ")).child(md::plain(format!("{}-x{i}", tb.id), t, cx))))
             .child(div().mt(u(6.)).flex().child(fix)));
     }
     col.into_any_element()
@@ -566,7 +567,7 @@ fn details(key: String, summary: &str, text: &str, cx: &App) -> AnyElement {
     let mid = p.mid;
     div().flex().flex_col()
         .child(div().id(SharedString::from(format!("{key}-sum"))).mt(u(4.)).flex().gap(u(4.)).cursor_pointer().text_color(p.dim).text_size(em(cx, 0.9 * 0.88)).hover(move |s| s.text_color(mid))
-            .child(if open { "▾" } else { "▸" }).child(summary.to_string())
+            .child(if open { "▼" } else { "▶" }).child(summary.to_string())
             .on_click(move |_, _, cx| { cx.stop_propagation(); DETAILS.with(|d| { let mut d = d.borrow_mut(); if !d.remove(&k) { d.insert(k.clone()); } }); cx.refresh_windows(); }))
         .when(open, |d| d.child(div().id(SharedString::from(format!("{key}-body"))).mt(u(6.)).mb(u(2.)).max_h(u(360.)).overflow_y_scroll().child(md::prose(format!("{key}-md"), text, false, false, None, cx))))
         .into_any_element()

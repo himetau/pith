@@ -218,7 +218,7 @@ impl ChatView {
             .when(typed.is_some(), |d| {
                 let mid = p.mid;
                 d.child(div().id(SharedString::from(format!("ux{id}"))).mt(u(2.)).text_size(em(cx, 0.8)).text_color(p.dim).cursor_pointer().hover(move |s| s.text_color(mid))
-                    .child(format!("{} expanded prompt", if exp_open { "▾" } else { "▸" })).on_click(toggle))
+                    .child(format!("{} expanded prompt", if exp_open { "▼" } else { "▶" })).on_click(toggle))
                     .when(exp_open, |d| d.child(div().mt(u(4.)).text_size(em(cx, 0.9)).text_color(p.dim).child(sel(SharedString::from(format!("ue{id}")), text.to_string()))))
             });
         let copy_text = text.to_string();
