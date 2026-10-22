@@ -3,12 +3,11 @@
 pith's ui was a webview (electron, then tauri). It's native now: `native/` is a gpui-kit 0.8 app (gpui-pre 0.3.9),
 same pi underneath. Why: the webview build was slow to show anything (`sys_info` ran `pi --version` on the main
 thread before the first frame), its type wasn't native on macos, and the look was a hyprland rice that read as a web
-page anywhere else. The tauri build (`src-tauri/`, `src/`) still builds (`nix run .#pith-tauri`) until the native one
-has been lived in for a while.
+page anywhere else. The tauri build is on the `tauri` branch, electron on `electron`.
 
 ## Layout
 - `native/src/core/`: what pith reads and runs, no ui. `pi.rs` (one `pi --mode rpc` per session), `sessions.rs`,
-  `sys.rs`, `term.rs`, `bridge.rs` (the extension's http bridge), `imagegen.rs` copied from src-tauri. New: `web.rs`
+  `sys.rs`, `term.rs`, `bridge.rs` (the extension's http bridge), `imagegen.rs` came over from the tauri build. New: `web.rs`
   (offscreen pages), `browser.rs` (the agent's browser tool on them), `preview.rs` (design previews, reload on change).
 - `native/src/state/`: `tab.rs` is a port of the old `tab.ts` (pi events in, transcript items out), `app.rs` is
   `Pith`, the global entity: tabs, routing pi's events to them, spawning pi, settings, the session list.

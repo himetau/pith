@@ -22,8 +22,8 @@ you need pi on your PATH and a rust toolchain. on linux also webkit2gtk-4.1 and
 vulkan.
 
 ```sh
-cd native && cargo run --release        # try it
-cd native && cargo build --release && cd .. && scripts/install-desktop.sh
+cd native && cargo run --release   # try it
+scripts/install-desktop.sh          # build it and put it in the launcher
 ```
 
 `install-desktop.sh` copies the release build to `~/.local/lib/pith` with the
@@ -37,8 +37,7 @@ on your PATH wins):
 nix run github:himetau/pith
 ```
 
-the old tauri build is still in `src-tauri/` + `src/` (`nix run .#pith-tauri`),
-and the electron one is on the `electron` branch.
+the old webview builds live on in branches: tauri on `tauri`, electron on `electron`.
 
 ## what it does
 

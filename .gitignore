@@ -1,6 +1,8 @@
+native/target
+result
+.claude/
+# leftovers from the webview builds, if you still have them checked out
 node_modules
 dist
 release
-result
-native/target
-.claude/
+src-tauri/target
