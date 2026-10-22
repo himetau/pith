@@ -41,7 +41,7 @@ export function prompt(title: string, value = "", opts: { multiline?: boolean; p
   });
 }
 
-export type PickItem = { label: string; hint?: string; group?: string; right?: string; on?: boolean; keys?: string; run: () => void };
+export type PickItem = { label: string; tag?: string; hint?: string; group?: string; right?: string; on?: boolean; keys?: string; run: () => void };
 
 // one picker for everything: palette, models, effort, mode
 export function picker(o: { title: string; items: PickItem[]; placeholder?: string; initial?: string }) {
@@ -51,14 +51,14 @@ export function picker(o: { title: string; items: PickItem[]; placeholder?: stri
   const close = () => scrim.remove();
   const draw = () => {
     const q = input.value.trim();
-    shown = q ? o.items.map((it) => ({ it, s: Math.max(fuzzy(q, it.label), fuzzy(q, `${it.group ?? ""} ${it.hint ?? ""}`) * 0.5) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.it) : o.items;
+    shown = q ? o.items.map((it) => ({ it, s: Math.max(fuzzy(q, it.label), fuzzy(q, `${it.tag ?? it.group ?? ""} ${it.hint ?? ""}`) * 0.5) })).filter((x) => x.s > 0).sort((a, b) => b.s - a.s).map((x) => x.it) : o.items;
     sel = Math.min(sel, Math.max(0, shown.length - 1));
     let lastGroup = "";
     const els: HTMLElement[] = [];
     shown.forEach((it, i) => {
       if (!q && it.group && it.group !== lastGroup) { els.push(h("div.pk-grp", it.group)); lastGroup = it.group; }
       els.push(h(`div.pk-row${i === sel ? ".sel" : ""}${it.on ? ".on" : ""}`, { onmousedown: (e: Event) => { e.preventDefault(); close(); it.run(); }, onmousemove: () => { if (sel !== i) { sel = i; draw(); } } },
-        h("span.pk-mark", it.on ? "●" : ""), h("span.pk-l", it.label), it.hint ? h("span.pk-h", it.hint) : null, it.right ? h("span.pk-r", it.right) : null, it.keys ? h("kbd", it.keys) : null));
+        h("span.pk-mark", it.on ? "●" : ""), h("span.pk-l", it.label), it.tag ? h("span.pk-t", it.tag) : null, it.hint ? h("span.pk-h", it.hint) : null, it.right ? h("span.pk-r", it.right) : null, it.keys ? h("kbd", it.keys) : null));
     });
     if (!shown.length) els.push(h("div.pk-none", "nothing matches"));
     swap(list, els);

@@ -130,6 +130,7 @@ body.resizing webview { pointer-events: none; }
 .pk-row.sel { background: var(--high); }
 .pk-mark { width: 1ch; color: var(--accent); font-size: .7em; }
 .pk-l { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pk-t { color: var(--mid); font-size: .78em; white-space: nowrap; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px; }
 .pk-h { color: var(--dim); font-size: .88em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .pk-r { margin-left: auto; color: var(--dim); font-size: .82em; white-space: nowrap; }
 .pk-none { padding: 14px; color: var(--dim); }

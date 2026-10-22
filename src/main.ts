@@ -136,7 +136,7 @@ function mount() {
     if (!app.models.length) await app.loadModels(t);
     const cur = t.model;
     const items: PickItem[] = app.models.map((m) => ({
-      label: m.id, group: m.provider, hint: m.name && m.name !== m.id ? m.name : undefined,
+      label: m.id, group: m.provider, tag: m.provider, hint: m.name && m.name !== m.id ? m.name : undefined,
       right: [m.contextWindow ? `${Math.round(m.contextWindow / 1000)}k` : "", m.reasoning ? "thinks" : "", m.input?.includes("image") ? "sees" : ""].filter(Boolean).join(" · "),
       on: cur?.id === m.id && cur?.provider === m.provider,
       run: () => void t.setModel(m),
