@@ -130,7 +130,7 @@ impl Asks {
         let id = a.id.clone();
         let prefill = a.prefill.clone().unwrap_or_default();
         let (field, sub, focus) = if want == 3 {
-            let s = cx.new(|cx| { let mut s = TextareaState::new(window, cx).rows(8).submit_on_enter(false); s.set_value(prefill, window, cx); s });
+            let s = cx.new(|cx| { let mut s = TextareaState::new(window, cx).rows(8).submit_on_enter(false); let n = prefill.len(); s.set_value(prefill, window, cx); s.set_selected_range(n..n, cx); s });
             let i2 = id.clone();
             // ctrl+enter sends an editor's text
             let sub = cx.subscribe_in(&s, window, move |this, _, ev: &InputEvent, _, cx| if let InputEvent::PressEnter { secondary: true, .. } = ev { this.submit_field(&i2, cx) });
@@ -138,7 +138,7 @@ impl Asks {
             (Field::Area(s), sub, f)
         } else {
             let ph = if want == 1 { "something else…".to_string() } else { a.placeholder.clone().unwrap_or_default() };
-            let s = cx.new(|cx| { let mut s = InputState::new(window, cx).placeholder(ph); s.set_value(prefill, window, cx); s });
+            let s = cx.new(|cx| { let mut s = InputState::new(window, cx).placeholder(ph); let n = prefill.len(); s.set_value(prefill, window, cx); s.set_selected_range(n..n, cx); s });
             let i2 = id.clone();
             let sub = cx.subscribe_in(&s, window, move |this, _, ev: &InputEvent, _, cx| if let InputEvent::PressEnter { .. } = ev {
                 if want == 1 { this.submit_question(&i2, cx) } else { this.submit_field(&i2, cx) }
@@ -298,8 +298,8 @@ fn opt(id: impl Into<ElementId>, key: &str, label: &str, yes: bool, deny: bool, 
 fn field(f: &Field, window: &Window, cx: &App) -> AnyElement {
     let (p, g) = (pal(cx), geo(cx));
     let (focus, el) = match f {
-        Field::Line(s) => (s.read(cx).focus_handle(cx), Input::new(s).appearance(false).p(u(0.)).h_auto().into_any_element()),
-        Field::Area(s) => (s.read(cx).focus_handle(cx), Textarea::new(s).appearance(false).xsmall().mx(u(-4.)).into_any_element()),
+        Field::Line(s) => (s.read(cx).focus_handle(cx), Input::new(s).appearance(false).p(u(0.)).h_auto().text_size(u(g.fs)).into_any_element()),
+        Field::Area(s) => (s.read(cx).focus_handle(cx), Textarea::new(s).appearance(false).xsmall().mx(u(-4.)).text_size(u(g.fs)).into_any_element()),
     };
     div().flex_1().min_w_0().py(u(6.)).px(u(10.)).rounded(u(g.r2)).bg(p.raised).border_1()
         .border_color(if focus.is_focused(window) { p.primary } else { p.line })

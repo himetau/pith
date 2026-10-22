@@ -860,7 +860,9 @@ impl Tab {
         }).detach();
     }
 
+    #[allow(dead_code)]
     pub fn context_percent(&self) -> Option<f64> { self.stats["contextUsage"]["percent"].as_f64() }
+    #[allow(dead_code)]
     pub fn cost(&self) -> f64 { self.stats["cost"].as_f64().unwrap_or(0.0) }
 }
 

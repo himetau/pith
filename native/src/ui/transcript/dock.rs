@@ -182,7 +182,7 @@ pub fn todo_strip(tab: &Entity<Tab>, open: bool, on_toggle: impl Fn(&ClickEvent,
         .child(h_flex().id("ts-head").w_full().gap(u(10.)).items_center().text_color(p.mid).cursor_pointer()
             .child(bar)
             .child(div().flex_none().child(format!("{done}/{}", todos.len())))
-            .child(div().flex_1().min_w_0().truncate().text_color(p.dim).children(cur.map(|c| format!(" · {c}"))))
+            .child(div().flex_1().min_w_0().truncate().text_color(p.dim).children(cur.map(|c| format!("· {c}"))))
             .child(Icon::new(if open { IconName::ChevronDown } else { IconName::ChevronRight }).size(u(fs * 1.2)))
             .on_click(on_toggle))
         .when(open, |d| d.child(div().mt(u(6.)).pl(u(2.)).child(tools::todo_list(todos.iter().map(|x| (x.content.as_str(), x.status.as_str())), cx))))
