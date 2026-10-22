@@ -1,60 +1,57 @@
-# handoff: the tauri port (branch `tauri`)
+# handoff: the native build (branch `gpui`)
 
-`main` is the old Electron build. This branch is pith on Tauri 2: Rust in `src-tauri/`, the same ui in `src/`, the system WebKitGTK instead of a bundled Chromium. Electron is gone from this branch.
+pith's ui was a webview (electron, then tauri). It's native now: `native/` is a gpui-kit 0.8 app (gpui-pre 0.3.9),
+same pi underneath. Why: the webview build was slow to show anything (`sys_info` ran `pi --version` on the main
+thread before the first frame), its type wasn't native on macos, and the look was a hyprland rice that read as a web
+page anywhere else. The tauri build (`src-tauri/`, `src/`) still builds (`nix run .#pith-tauri`) until the native one
+has been lived in for a while.
 
-The launcher runs the Tauri build now: `npm run install-desktop` builds a release binary and copies it to `~/.local/lib/pith/` with `ext/` and `prompts/` beside it, so switching branches in the repo doesn't touch it.
+## Layout
+- `native/src/core/`: what pith reads and runs, no ui. `pi.rs` (one `pi --mode rpc` per session), `sessions.rs`,
+  `sys.rs`, `term.rs`, `bridge.rs` (the extension's http bridge), `imagegen.rs` copied from src-tauri. New: `web.rs`
+  (offscreen pages), `browser.rs` (the agent's browser tool on them), `preview.rs` (design previews, reload on change).
+- `native/src/state/`: `tab.rs` is a port of the old `tab.ts` (pi events in, transcript items out), `app.rs` is
+  `Pith`, the global entity: tabs, routing pi's events to them, spawning pi, settings, the session list.
+- `native/src/ui/`: `workspace.rs` (window, sidebar, header, keys), `chat.rs` + `transcript/` + `tools.rs`
+  (transcript), `composer.rs` + `commands.rs` + `picker.rs` (typing, slash and @ menus, palette, model picker),
+  `home.rs`, `panes/` (right panel: changes, files, terminal on alacritty_terminal, agents, browser, preview),
+  `settings.rs` `usage.rs` `agents.rs` `images.rs` (pages), `theme.rs` (palette, fonts, appearance).
+- `native/src/platform.rs`: macos menu bar, notifications, matugen's file watched for the accent.
 
-## What was wrong, and is fixed
-- **eval into webviews never ran, and it idled hot.** `watch_dir` in `lib.rs` fired on every notify event, Access included, and the handler reads the file it watches, so it fed itself and starved the main thread. Only Create/Modify count now. Idle on a real (headless sway) Wayland session: ~0.7% CPU total.
-- child webviews: tauri's `add_child` packs into a vertical GtkBox on linux and ignores position/size, so `webviews.rs` moves them into a GtkOverlay over the main webview and places them through `get-child-position`.
-- sidebar showing too few sessions: `read_to_string` failed on non-UTF-8 files; it reads lossily now. It matches what's on disk.
-- composer focus ring: `:focus-visible` only outlines buttons now.
-- terminal stayed visible over other panes: `.term-box.on` set `visibility: visible`, which beats the hidden pane. It only turns on inside `.pane.on`.
-- the installed copy fell back to the repo's `ext/`: tauri's `resource_dir` isn't the exe's folder for a plain binary, so setup checks next to the exe too.
+## How it works
+- First frame doesn't wait on anything: settings are read sync (a file), the session list and pi come later on
+  worker threads. Opening a session paints its history off disk (`sys::agent_session`) and starts pi behind it;
+  pi's own `get_entries` replaces it once it's up.
+- Web pages never sit in the window. `core/web.rs` keeps one offscreen page per id: on linux a WebKitGTK view in a
+  `gtk::OffscreenWindow` on its own gtk thread (gpui doesn't use glib), on macos a WKWebView in a borderless window
+  far off screen, driven on the main queue. The panes show snapshots of them every 350ms while visible and forward
+  clicks and the wheel as DOM events. WebKitGTK aborts trying to make a gl context offscreen unless the view's
+  hardware acceleration policy is Never.
+- The macos side of `web.rs` and the menus has only been compiled (`cargo check --target aarch64-apple-darwin`),
+  never run.
 
-## Checked in the Tauri build (Xvfb harness + headless sway)
-pi sessions end to end, the question card, the browser tool (navigate, snapshot, click; also on github.com, strict CSP), preview with live reload, terminal, the agents pane, `npx tauri build` (AppImage 103 MB, .deb 4.3 MB), Wayland app_id is `pith`.
-
-Not checked, because it would mean touching the real desktop: drag and drop, notifications, the image clipboard.
-
-## Memory, fresh start, idle, no session open, same headless sway
-| | RSS sum | PSS sum |
-|---|---|---|
-| Electron | 704 MB | 251 MB |
-| Tauri | 496 MB | 234 MB |
-
-PSS counts shared libraries once, so it's the honest number: the win is small, the WebKit web process alone is ~115 MB PSS. The bigger difference is on disk (9.3 MB binary vs 284 MB unpacked Electron).
-
-## Added on this branch
-- agents pane: only running agents, and failed or aborted ones from the last 15 minutes (a kill by the user doesn't count). Failures can be dismissed. Click one to open its session as a tab: read straight off disk while it runs (`agents_session` in `sys.rs`, `Tab.watch`/`peek()`), and a normal session you can type in once it's done.
-- markdown in replies is coloured like opencode: headings, bold, italics, inline code and list markers each get a theme accent (`--md-*` in `base.css`), quieter inside thinking.
-- the sidebar only moves a session to the top when you send in it, not when you open it (`Tab.sent`).
-- ui scale: `scale` in settings is the main webview's zoom (`win_zoom`), ctrl+= / ctrl+- / ctrl+0. `Side.layout()` multiplies the pane rects by it, since the native webviews are placed in window pixels. The pane webviews themselves stay at 1.
-- subagent rows in the chat and todo items open the agent's session: `act.agentRun` (set up in `panes.ts`) resolves a run by session file, hub id or task. A todo links when 60% of its words are in a subagent task from the same chat. The extension puts `sessionFile` in each result's details so the link survives reloads.
-- tool rows expand again: clicking bumped only the block's version, and the transcript redraws by message version.
-- `/design` and the design session prompt work from a brief (what, headline, direction, the one detail), build a full site or a working app screen, then screenshot it in the browser and fix it. A run is pricey (~$0.80 for a landing page) because of the screenshot loop.
-- composer at non-1 scales: `overflow-x: hidden` (webkit's zoom overstates textarea width), a vertical scrollbar only at max height, and it re-autosizes when its width changes.
-- clicking "working" opens the run's steps (`runSteps` in `chat.ts`): every thinking stretch, tool call and reply since the last prompt, then a live tail of the thinking or the running tool's output.
-- 180hz: webkit's `PreferPageRenderingUpdatesNear60FPS` feature (on by default) held pages to ~60fps on the user's 180hz monitor. `webviews::native_refresh` turns it off for every webview, through webkit's C feature api since the gtk bindings don't wrap it. `WEBKIT_DRAW_FPS=1` draws the compositor's real fps (scrolling included) on screen; that's what showed 60-40 before.
-- the real 60fps cap was gtk3: its frame clock paces off the previous frame's `refresh_interval`, which it only fills in for frames it commits itself. webkit paints through gl, gtk3 swaps those without a frame callback, so the field stays 0 and the clock uses its built-in 16667us. `webviews::pace_frame_clock` fills it in after each paint from the window's monitor (GdkFrameTimings is private: written by offset 56, checked against the public getter first). measured 60 -> 181. `PITH_FRAME_LOG=1` logs the frame clock once a second.
-- ctrl+shift+f shows an fps readout (`fps.ts`). WebKitGTK 2.54 drives frames off DRM vblank of the output it matches to the window (by physical mm, refresh from the GdkMonitor) and rechecks when the window moves, so it should run at the monitor's rate; this is how to check.
-- voxel icon: `packaging/voxel-icon.py` renders it at any size; the install script renders each hicolor size on its own.
-
-## Outside the repo
-The subagent extension at `~/.pi/agent/extensions/subagent` (not in git) was changed for the agents pane:
-- `runner.ts`: every run keeps a session in `~/.pi/agent/subagent-sessions/` (pruned after 30 days) instead of `--no-session`. A run that fails on its own is resumed on that session with a "pick up where you left off" prompt, up to 3 times with backoff (`PI_SUBAGENT_AUTO_CONTINUE=0` turns it off, a number sets the count). A user abort is never retried.
-- `store.ts`: records carry `sessionFile` and `retries`; `markRetrying()` puts a record back to `spawning` with no pid between attempts, which `read_agent_hub` in `sys.rs` knows not to mark aborted.
-
-## Testing without opening windows on the user's screen
+## Testing without touching the desktop
 ```sh
-npm run build:ui && (cd src-tauri && cargo build)
-scripts/dev/tauri-run.sh 6                       # debug build on Xvfb :77, control dir enabled
-scripts/dev/ctl.py js "window.pith_.app.view"    # runs an expression in the ui
-import -display :77 -window root /tmp/pith-dev/shot.png
+cd native && cargo build
+dev/run.sh qa                        # your build on its own headless sway (gpu), fake model, scratch config
+dev/ctl.py qa '{"type":"use a tool please"}' '{"keys":"enter"}' '{"dump":true}'
+dev/shot.sh qa /tmp/x.png
+dev/run.sh qa stop
 ```
-`window.pith_` exposes `{ app, act, chatFor, api }`. Set `PI_CODING_AGENT_DIR` to a scratch copy of `~/.pi/agent` (auth.json, models.json, settings.json) so test sessions and agents don't land in the user's lists. For real Wayland without a window on screen: `WLR_BACKENDS=headless WLR_RENDERER=pixman sway -c <config>` and point `WAYLAND_DISPLAY` at its socket.
+`dev/fakemodel.py` is an openai-compatible stand-in; words in the prompt pick what it does (tool, edit, read, write,
+slow, long, ponder, browse <url>, preview <path>). `FAKE_PORT=<n>` gives a run its own copy. The `appearance`
+setting (system/light/dark) is how to see light mode, the headless sway is always dark.
 
-Kill by pid, and check the pid is yours: `setsid` behind `&&` hands back a wrapper shell's pid, not the app's.
+macos type-check from linux: stub `CC`/`AR` for aarch64-apple-darwin, and an empty
+`target/mac/aarch64-apple-darwin/debug/build/gpui-pre-apple-*/out/stitched_shaders.metal`, which gpui's build script
+only writes on a mac host.
+
+## Not done / not checked
+- Never run on a mac. Never run under a real Wayland or X11 session either, only headless sway.
+- Real clipboard paste and drag from a file manager were tested through dev hooks only.
+- Typing into the browser/preview pane (clicks and scrolling go through, keys don't).
+- IME and dead keys in the terminal.
 
 ## Conventions
-Commits are lowercase and casual, in the user's voice. The repo's local git config has the identity (himetau, GitHub noreply address); never the proton one. It pushes to github.com/himetau/pith (private). Comments are short and lowercase, explaining why.
+Commits are lowercase and casual, in the user's voice. The repo's local git config has the identity (himetau,
+GitHub noreply address); never the proton one. Comments are short and lowercase, explaining why.
