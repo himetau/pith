@@ -1,13 +1,15 @@
 #!/bin/bash
 # puts pith in app launchers (quickshell, rofi): the release build, an icon in the hicolor theme and a .desktop entry.
-# the binary gets copied out of the repo with its ext/ and prompts/ next to it (where tauri looks for resources),
+# the binary gets copied out of the repo with its ext/ and prompts/ next to it (where pith looks for them),
 # so switching branches or cleaning target/ doesn't take the launcher down. `npm run install-desktop` builds first
 set -e
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 lib="$HOME/.local/lib/pith"
-bin="$repo/src-tauri/target/release/pith"
-[ -x "$bin" ] || { echo "no release build at $bin, run: npm run app" >&2; exit 1; }
+# the native build when there is one, the tauri one otherwise. PITH_BIN picks one explicitly
+bin="${PITH_BIN:-$repo/native/target/release/pith}"
+[ -x "$bin" ] || bin="$repo/src-tauri/target/release/pith"
+[ -x "$bin" ] || { echo "no release build, run: (cd native && cargo build --release)" >&2; exit 1; }
 
 mkdir -p "$lib"
 # copy then rename, so a pith that's running keeps its old binary instead of failing with "text file busy"
