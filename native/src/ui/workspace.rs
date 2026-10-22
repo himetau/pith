@@ -40,6 +40,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", StopRun, Some("Workspace")),
         KeyBinding::new(&format!("{m}-q"), Quit, None),
     ]);
+    super::panes::bind_keys(cx);
 }
 
 pub const TOP: f32 = 44.;
