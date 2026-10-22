@@ -1,9 +1,14 @@
-# handoff: the native build (branch `gpui`)
+# handoff: the native build
 
 pith's ui was a webview (electron, then tauri). It's native now: `native/` is a gpui-kit 0.8 app (gpui-pre 0.3.9),
 same pi underneath. Why: the webview build was slow to show anything (`sys_info` ran `pi --version` on the main
-thread before the first frame), its type wasn't native on macos, and the look was a hyprland rice that read as a web
-page anywhere else. The tauri build is on the `tauri` branch, electron on `electron`.
+thread before the first frame) and its type wasn't native on macos. The tauri build is on the `tauri` branch, electron on `electron`.
+
+The look and features are the tauri build's, 1:1: `ui/theme.rs` reads matugen's whole palette and hyprland's gaps,
+border and rounding, everything is the terminal's mono font, and css pixels go through `theme::u()` so the `scale`
+setting zooms like the webview did (the kit's Root sets the rem to the theme font size every frame, so `u()` divides
+by fontSize). `ui/frame.rs` draws the windows with their titles in the border; gpui paints a box's border over its
+children, so a window's border is its own `edge()` layer under the legends. The tauri build's css and ts were the spec.
 
 ## Layout
 - `native/src/core/`: what pith reads and runs, no ui. `pi.rs` (one `pi --mode rpc` per session), `sessions.rs`,

@@ -7,14 +7,16 @@ changes, files, a terminal, running subagents, the browser the agent drives and
 a live preview for designs.
 
 its native now. the ui is drawn with [gpui](https://gpui.rs) (zeds ui framework)
-through gpui-kit, not a webview: text goes through coretext on macos, the system
-font everywhere, mono only for code. it opens its first frame in about 150ms and
-paints a session off disk before pi has even started. web pages (the agents
-browser, design previews) render offscreen in the platforms own webkit and show
-up in the panel as live snapshots, so theres no webview in the window at all.
+through gpui-kit, not a webview, but it looks and works exactly like the old
+webview build did. it opens its first frame in about 150ms and paints a session
+off disk before pi has even started. web pages (the agents browser, design
+previews) render offscreen in the platforms own webkit and show up in the panel
+as live snapshots, so theres no webview in the window at all.
 
-light and dark follow the system, and on linux the accent follows matugen if
-`~/.config/pith/colors.css` exists.
+it looks like the rest of my desktop: colours come from matugen
+(`~/.config/pith/colors.css`) and follow the wallpaper live, the font is whatever
+kitty uses, and gaps, borders and corners are read from hyprland, so the panes
+look like your other windows, titles cut into their borders like a tui.
 
 ## running it
 
@@ -44,7 +46,7 @@ the old webview builds live on in branches: tauri on `tauri`, electron on `elect
 - several sessions at once, background ones ping you when theyre done or stuck
 - tool calls fold into one line rows: diffs, command output, todo lists, images
 - `/` commands, `@` files, `!cmd` for the shell, paste or drop images, steer it while it works
-- ask / edits / plan / auto modes on shift+tab, ctrl/cmd+k for everything else
+- ask / edits / plan / auto modes on shift+tab, ctrl+k for everything else, alt+1-6 for the panes
 - `/review`, `/security-review`, `/design` and friends ship with it
 - image generation, and a usage page that reads spend straight off pis session files
 
