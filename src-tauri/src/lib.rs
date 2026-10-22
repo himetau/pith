@@ -370,9 +370,11 @@ pub fn run() {
         .setup(|app| {
             let h = app.handle().clone();
             // pi and the shell read the extension and prompts off disk. bundled builds carry them as resources,
-            // the launcher's copy (scripts/install-desktop.sh) keeps them next to the binary, a dev build reads the repo
+            // the launcher's copy (scripts/install-desktop.sh) keeps them next to the binary, a dev build reads the repo.
+            // the nix package puts them in lib/pith beside bin/, tauri only guesses that for /usr/bin
             let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
-            let bundled = [app.path().resource_dir().ok(), exe_dir].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists());
+            let lib_dir = exe_dir.as_ref().map(|d| d.join("../lib/pith"));
+            let bundled = [app.path().resource_dir().ok(), exe_dir, lib_dir].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists());
             let _ = RES.set(bundled.unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")));
             let hb = h.clone();
             let _ = BRIDGE.set(bridge::start(move |tab, op, args| bridge_call(&hb, tab, op, args)));
