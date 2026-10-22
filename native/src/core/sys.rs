@@ -38,6 +38,8 @@ pub fn load_settings() -> Value {
     if let Ok(text) = fs::read_to_string(settings_file()) {
         if let Ok(Value::Object(saved)) = serde_json::from_str::<Value>(&text) {
             let o = out.as_object_mut().unwrap();
+            // an older native build saved the text size as textSize; fontSize is the webview's key and wins when both are there
+            if let (Some(t), false) = (saved.get("textSize").and_then(|v| v.as_f64()), saved.contains_key("fontSize")) { o.insert("fontSize".into(), json!(t.clamp(10., 22.).round())); }
             for (k, v) in saved { o.insert(k, v); }
         }
     }

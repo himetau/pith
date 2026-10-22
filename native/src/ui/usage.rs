@@ -1,18 +1,11 @@
-// Usage: spend against your own budgets, the last 30 days, a year of days, where it went, and the
-// sessions that cost most. the report is read and bucketed by local day on a worker
-use super::page::{self, cost, empty, group_digits, heading, tokens};
-use super::theme::pal;
+// Usage: limits against your own budgets, totals, 26 weeks of days, the last 30 days, and where it went (usage.ts).
+// the report is read and bucketed by local day on a worker
+use super::page::{self, base, btn, cost, group_digits, head, ic, tokens, wide, Btn};
+use super::theme::{em, geo, mix, pal, u};
 use super::tools::tilde;
 use crate::core::sessions;
 use crate::state::app::{Pith, View};
 use crate::state::tab::now_ms;
-use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::chart::BarChart;
-use gpui_kit::component::progress::Progress;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable};
 use gpui_kit::*;
 use gpui_kit::prelude::FluentBuilder as _;
 use serde_json::Value;
@@ -21,7 +14,6 @@ use std::rc::Rc;
 
 const HOUR: f64 = 3_600_000.;
 const DAY: f64 = 24. * HOUR;
-const HEAT_WEEKS: i32 = 53;
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const WDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -37,15 +29,15 @@ impl Tot {
 struct Row { ts: f64, model: String, sess: usize, input: f64, output: f64, cache_read: f64, cache_write: f64, cost: f64 }
 
 #[derive(Clone)]
-struct Day { label: SharedString, full: SharedString, month: u8, mday: u8, tot: Tot }
+struct Day { label: SharedString, full: SharedString, month: u8, tot: Tot }
 
 #[derive(Clone)]
-struct Sess { file: String, title: String, cwd: String, updated: f64, calls: u64, tokens: f64, cost: f64 }
+struct Sess { file: String, title: String, cwd: String, tokens: f64, cost: f64 }
 
 struct Report {
     calls: usize,
     sessions: Vec<Sess>,
-    win5h: Tot, today: Tot, week: Tot, month: Tot, all: Tot,
+    win5h: Tot, week: Tot, month: Tot, today: Tot, d30: Tot, all: Tot,
     // minutes until the oldest call in the 5 hour window ages out
     ages_out: Option<i64>,
     resets_in: i64,
@@ -80,7 +72,7 @@ fn day(ms: f64, by_day: &HashMap<i64, Tot>) -> Day {
     Day {
         label: format!("{m} {}", t.tm_mday).into(),
         full: format!("{}, {m} {}", WDAYS[t.tm_wday.clamp(0, 6) as usize], t.tm_mday).into(),
-        month: t.tm_mon as u8, mday: t.tm_mday as u8,
+        month: t.tm_mon as u8,
         tot: by_day.get(&day_key(ms)).copied().unwrap_or_default(),
     }
 }
@@ -88,13 +80,12 @@ fn day(ms: f64, by_day: &HashMap<i64, Tot>) -> Day {
 fn build(v: Value) -> Report {
     let now = now_ms();
     let f = |x: &Value| x.as_f64().unwrap_or(0.);
-    let mut sessions: Vec<Sess> = v["sessions"].as_array().into_iter().flatten().map(|s| {
+    let sessions: Vec<Sess> = v["sessions"].as_array().into_iter().flatten().map(|s| {
         let u = &s["usage"];
-        let title = s["title"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(140).collect::<String>();
         Sess {
-            file: s["file"].as_str().unwrap_or("").into(), title: if title.trim().is_empty() { "Untitled".into() } else { title },
-            cwd: s["cwd"].as_str().unwrap_or("").into(), updated: f(&s["updated"]), calls: 0,
-            tokens: f(&u["input"]) + f(&u["output"]) + f(&u["cacheRead"]) + f(&u["cacheWrite"]), cost: f(&u["cost"]),
+            file: s["file"].as_str().unwrap_or("").into(), title: s["title"].as_str().unwrap_or("").lines().next().unwrap_or("").chars().take(200).collect(),
+            cwd: s["cwd"].as_str().unwrap_or("").into(),
+            tokens: f(&u["input"]) + f(&u["output"]) + f(&u["cacheRead"]), cost: f(&u["cost"]),
         }
     }).collect();
     let mut rows = vec![];
@@ -104,10 +95,9 @@ fn build(v: Value) -> Report {
             rows.push(Row { ts: f(&r[0]), model: r[1].as_str().unwrap_or("?").into(), sess, input: f(&r[2]), output: f(&r[3]), cache_read: f(&r[4]), cache_write: f(&r[5]), cost: f(&r[6]) });
         }
     }
-    for r in &rows { if let Some(s) = sessions.get_mut(r.sess) { s.calls += 1; } }
 
     let (today0, month0) = (midnight(now, 0), month_start(now, 0));
-    let (mut win5h, mut today, mut week, mut month, mut all) = Default::default();
+    let (mut win5h, mut week, mut month, mut today, mut d30, mut all) = Default::default();
     let mut oldest5h = f64::MAX;
     let mut by_day: HashMap<i64, Tot> = HashMap::new();
     let mut by_model: HashMap<String, Tot> = HashMap::new();
@@ -116,16 +106,17 @@ fn build(v: Value) -> Report {
         let add = |t: &mut Tot| t.add(r);
         add(&mut all);
         if r.ts >= now - 5. * HOUR { add(&mut win5h); oldest5h = oldest5h.min(r.ts); }
-        if r.ts >= today0 { add(&mut today); }
         if r.ts >= now - 7. * DAY { add(&mut week); }
+        if r.ts >= now - 30. * DAY { add(&mut d30); }
         if r.ts >= month0 { add(&mut month); }
+        if r.ts >= today0 { add(&mut today); }
         add(by_day.entry(day_key(r.ts)).or_default());
         add(by_model.entry(r.model.clone()).or_default());
         add(by_folder.entry(sessions.get(r.sess).map(|s| s.cwd.clone()).unwrap_or_else(|| "?".into())).or_default());
     }
     let days30 = (0..30).rev().map(|i| day(midnight(now, -i), &by_day)).collect();
-    // whole weeks, monday first, ending with today
-    let first = midnight(now, -(HEAT_WEEKS * 7 - 1));
+    // 26 weeks back from today, the first one from its monday
+    let first = midnight(now, -(26 * 7 - 1));
     let first = midnight(first, -((tm(first).tm_wday + 6) % 7));
     let mut heat = vec![];
     for i in 0.. {
@@ -136,26 +127,26 @@ fn build(v: Value) -> Report {
     let top = |m: HashMap<String, Tot>| {
         let mut v: Vec<(String, Tot)> = m.into_iter().collect();
         v.sort_by(|a, b| b.1.cost.total_cmp(&a.1.cost).then(b.1.tokens().total_cmp(&a.1.tokens())));
-        v.truncate(8);
+        v.truncate(10);
         v
     };
     Report {
-        calls: rows.len(), sessions, win5h, today, week, month, all,
-        ages_out: (oldest5h < f64::MAX).then(|| ((oldest5h + 5. * HOUR - now) / 60_000.).ceil().max(1.) as i64),
+        calls: rows.len(), sessions, win5h, week, month, today, d30, all,
+        ages_out: (oldest5h < f64::MAX).then(|| ((oldest5h + 5. * HOUR - now) / 60_000.).round().max(1.) as i64),
         resets_in: ((month_start(now, 1) - now) / DAY).ceil() as i64,
         days30, heat, by_model: top(by_model), by_folder: top(by_folder),
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Sort { Title, Calls, Tokens, Cost, Updated }
+// the hover card over the heatmap and the bars (.tip)
+#[derive(Clone, PartialEq)]
+struct Tip { key: usize, title: SharedString, body: SharedString, at: Point<Pixels> }
 
 pub struct UsagePage {
     report: Option<Rc<Report>>,
     loading: bool,
     tokens: bool,
-    sort: (Sort, bool),
-    all_sessions: bool,
+    tip: Option<Tip>,
     last_view: View,
     _subs: Vec<Subscription>,
 }
@@ -169,7 +160,7 @@ impl UsagePage {
             if v == View::Usage && this.last_view != View::Usage { this.load(cx); }
             this.last_view = v;
         });
-        let mut page = UsagePage { report: None, loading: false, tokens: false, sort: (Sort::Cost, true), all_sessions: false, last_view: View::Usage, _subs: vec![sub] };
+        let mut page = UsagePage { report: None, loading: false, tokens: false, tip: None, last_view: View::Usage, _subs: vec![sub] };
         page.load(cx);
         page
     }
@@ -184,244 +175,288 @@ impl UsagePage {
         }).detach();
     }
 
-    // one cell of the strip up top: what went out in a window, against its budget when there is one
-    fn stat(&self, id: &'static str, label: &'static str, t: Tot, budget: Option<f64>, note: String, cx: &mut Context<Self>) -> AnyElement {
+    // a hover target that shows the tip by the pointer, and hides it when left
+    fn tipped(&self, el: Stateful<Div>, key: usize, title: SharedString, body: SharedString, cx: &mut Context<Self>) -> Stateful<Div> {
+        el.on_mouse_move(cx.listener(move |this, e: &MouseMoveEvent, _, cx| {
+            let t = Tip { key, title: title.clone(), body: body.clone(), at: e.position };
+            if this.tip.as_ref() != Some(&t) { this.tip = Some(t); cx.notify(); }
+        }))
+        .on_hover(cx.listener(move |this, h: &bool, _, cx| {
+            if !*h && this.tip.as_ref().is_some_and(|t| t.key == key) { this.tip = None; cx.notify(); }
+        }))
+    }
+
+    // budgets are the user's own, pi has no limits to report. state gets a word, never just a colour
+    fn limit(&self, id: &'static str, label: &str, spent: f64, budget: f64, note: String, cx: &mut Context<Self>) -> AnyElement {
+        let (p, g) = (pal(cx), geo(cx));
+        let pct = if budget > 0. { spent / budget * 100. } else { 0. };
+        let state = if budget <= 0. { "" } else if pct >= 100. { "over" } else if pct >= 80. { "close" } else { "ok" };
+        let (word, color) = match state { "over" => ("over budget", p.red), "close" => ("near budget", p.gold), _ => ("within budget", p.green) };
+        let on_color = match state { "over" => p.red, "close" => p.gold, _ => p.primary };
+        let border = match state { "over" => mix(p.red, 0.6, p.line), "close" => mix(p.gold, 0.6, p.line), _ => p.line };
+        let on = if budget > 0. { ((pct / 100. * 24.).round() as usize).min(24) } else { 0 };
+        let app = Pith::global(cx);
+        div().border(u(1.)).border_color(border).rounded(u(g.round)).py(u(12.)).px(u(14.)).bg(p.surface_low)
+            .child(div().flex().justify_between().items_baseline()
+                .child(div().text_size(em(cx, 0.82)).text_color(p.dim).child(label.to_string()))
+                .when(!state.is_empty(), |d| d.child(div().text_size(em(cx, 0.8)).px(u(6.)).rounded(u(3.)).bg(p.high).text_color(color).child(word))))
+            .child(div().mt(u(4.)).mb(u(8.)).flex().items_baseline().gap(u(6.))
+                .child(big(cost(spent), cx))
+                .child(if budget > 0. { div().text_color(p.dim).child(format!(" of {}", cost(budget))).into_any_element() } else {
+                    page::link(id, "set a budget", cx).on_click(move |_, _, cx| app.update(cx, |a, cx| a.show(View::Settings, cx))).into_any_element()
+                }))
+            .child(div().flex().gap(u(2.)).when(budget <= 0., |d| d.opacity(0.5))
+                .children((0..24).map(|i| div().flex_1().h(u(10.)).rounded(u(2.)).bg(if i < on { on_color } else { p.high }))))
+            .child(div().mt(u(6.)).text_size(em(cx, 0.82)).text_color(p.dim).child(if budget > 0. { format!("{}% · {note}", pct.round()) } else { note }))
+            .into_any_element()
+    }
+
+    fn current(&self, narrow: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
         let p = pal(cx);
-        let mut cell = v_flex().flex_1().min_w_0().px_4().py_3().gap_1()
-            .child(div().text_xs().text_color(p.dim).child(label))
-            .child(div().text_size(px(22.)).font_weight(FontWeight::SEMIBOLD).text_color(cx.theme().foreground).child(cost(t.cost)))
-            .child(div().text_xs().text_color(p.dim).truncate().child(format!("{} tokens · {} calls", tokens(t.tokens()), group_digits(t.n))));
-        match budget {
-            Some(b) if b > 0. => {
-                let pct = t.cost / b * 100.;
-                let (word, color) = if pct >= 100. { ("Over budget", p.red) } else if pct >= 80. { ("Near budget", p.gold) } else { ("Within budget", p.green) };
-                cell = cell
-                    .child(div().mt_2().child(Progress::new(id).value(pct as f32).color(if pct >= 80. { color } else { cx.theme().primary })))
-                    .child(h_flex().gap_1().text_xs().child(div().text_color(color).child(word)).child(div().text_color(p.dim).truncate().child(format!("· {}% of {}", pct.round(), cost(b)))))
-                    .child(div().text_xs().text_color(p.dim).truncate().child(note));
-            }
-            Some(_) => {
-                let app = Pith::global(cx);
-                cell = cell
-                    .child(div().mt_2().h(px(6.)).rounded_full().bg(cx.theme().muted))
-                    .child(h_flex().text_xs().child(div().id(id).text_color(cx.theme().link).cursor_pointer().hover(|s| s.underline()).child("Set a budget")
-                        .on_click(move |_, _, cx| app.update(cx, |a, cx| a.show(View::Settings, cx)))))
-                    .child(div().text_xs().text_color(p.dim).truncate().child(note));
-            }
-            None => { cell = cell.child(div().mt_2().h(px(6.))).child(div().text_xs().child(" ")).child(div().text_xs().text_color(p.dim).child(note)); }
+        let t = Pith::global(cx).read(cx).active.clone()?;
+        let t = t.read(cx);
+        let st = t.stats.clone();
+        if st.is_null() { return None; }
+        let f = |v: &Value| v.as_f64().unwrap_or(0.);
+        let cu = &st["contextUsage"];
+        let pct = f(&cu["percent"]);
+        let ctx_line = if cu["tokens"].is_number() { format!("{} of {} · {}%", tokens(f(&cu["tokens"])), tokens(f(&cu["contextWindow"])), pct.round()) } else { "known after the next reply".into() };
+        let kv = |k: &str, v: String, cx: &App| fr(1.).min_w_0().child(div().text_size(em(cx, 0.82)).text_color(p.dim).child(k.to_string())).child(div().child(v));
+        let mut grid = div().flex().flex_wrap().items_end().gap(u(14.));
+        let cells = vec![
+            fr(2.).min_w_0().child(div().text_size(em(cx, 0.82)).text_color(p.dim).child("context"))
+                .child(div().h(u(8.)).mt(u(6.)).mb(u(4.)).rounded(u(4.)).bg(p.high).overflow_hidden()
+                    .child(div().h_full().rounded(u(4.)).bg(p.primary).w(relative((pct.min(100.) / 100.) as f32))))
+                .child(div().text_color(p.dim).child(ctx_line)),
+            kv("input", tokens(f(&st["tokens"]["input"])), cx), kv("output", tokens(f(&st["tokens"]["output"])), cx),
+            kv("cache read", tokens(f(&st["tokens"]["cacheRead"])), cx), kv("cache write", tokens(f(&st["tokens"]["cacheWrite"])), cx),
+            kv("cost", cost(f(&st["cost"])), cx), kv("tool calls", format!("{}", f(&st["toolCalls"]) as u64), cx),
+        ];
+        // at narrow widths it's three to a row
+        if narrow {
+            grid = div().grid().grid_cols(3).items_end().gap(u(14.)).children(cells.into_iter().map(|c| c.flex_none()));
+        } else {
+            grid = grid.flex_nowrap().children(cells);
         }
-        cell.into_any_element()
+        Some(block(cx).mb(u(22.))
+            .child(sec(cx).child(div().child("this session")).child(div().text_color(p.dim).min_w_0().truncate().child(t.title())))
+            .child(grid).into_any_element())
     }
 
-    fn chart(&self, r: &Report, cx: &mut Context<Self>) -> AnyElement {
-        let accent = cx.theme().primary;
-        let by_tokens = self.tokens;
-        let chart = BarChart::new(r.days30.clone())
-            .band(|d: &Day| d.label.clone())
-            .value(move |d: &Day| if by_tokens { d.tot.tokens() } else { d.tot.cost })
-            .name(if by_tokens { "Tokens" } else { "Spend" })
-            .fill(move |_, _, _, _| accent)
-            .corner_radii(Corners { top_left: px(3.), top_right: px(3.), bottom_left: px(0.), bottom_right: px(0.) })
-            .value_axis(true)
-            .value_tick_count(3)
-            .value_tick_format(move |v| if by_tokens { tokens(v) } else { cost(v) })
-            .grid_dashed(false)
-            .band_tick_count(6)
-            .padding_inner(0.3)
-            .tooltip_title(|d: &Day| d.full.clone())
-            .tooltip_value(move |d: &Day, _| if d.tot.n == 0 { "Nothing".into() } else {
-                format!("{} · {} tokens · {} calls", cost(d.tot.cost), tokens(d.tot.tokens()), d.tot.n).into()
-            })
-            .id(if by_tokens { "usage-days-tokens" } else { "usage-days-cost" });
-        div().h(px(220.)).w_full().child(chart).into_any_element()
-    }
-
-    fn heat(&self, r: &Report, width: f32, cx: &mut Context<Self>) -> AnyElement {
+    fn heat(&self, r: &Report, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
-        let accent = cx.theme().primary;
-        let empty_cell = cx.theme().muted;
         // levels by quartile of the days that had any spend, so one huge day doesn't wash the rest out
         let mut vals: Vec<f64> = r.heat.iter().map(|d| d.tot.cost).filter(|v| *v > 0.).collect();
         vals.sort_by(|a, b| a.total_cmp(b));
-        let q = |f: f64| vals.get(((f * vals.len() as f64) as usize).min(vals.len().saturating_sub(1))).copied().unwrap_or(0.);
+        let q = |f: f64| vals.get(((f * vals.len() as f64).floor() as usize).min(vals.len().saturating_sub(1))).copied().unwrap_or(0.);
         let steps = [q(0.25), q(0.5), q(0.75), q(0.9)];
-        let shade = move |v: f64| -> Hsla {
-            if v <= 0. { return empty_cell; }
-            let lvl = steps.iter().filter(|s| v > **s).count();
-            accent.opacity([0.3, 0.48, 0.66, 0.84, 1.][lvl])
-        };
-        const CELL: f32 = 12.;
+        let level = |v: f64| if v <= 0. { 0 } else { 1 + steps.iter().filter(|s| v > **s).count() };
+        const CELL: f32 = 13.;
         const GAP: f32 = 3.;
-        // as many recent weeks as fit, so today is always on screen
-        let weeks: Vec<&[Day]> = r.heat.chunks(7).collect();
-        let fit = (((width - 28.) / (CELL + GAP)).floor() as usize).max(8);
-        let weeks = weeks[weeks.len().saturating_sub(fit)..].to_vec();
+        let weeks = r.heat.len().div_ceil(7);
+        let (vw, vh) = (weeks as f32 * (CELL + GAP) + 30., 7. * (CELL + GAP) + 18.);
+        let hl = |cx: &App| div().absolute().text_size(u(10.)).line_height(u(13.)).text_color(pal(cx).dim).whitespace_nowrap();
+        let mut svg = div().relative().flex_none().w(u(vw)).h(u(vh));
         let mut last_month = 255u8;
-        let cols = weeks.iter().enumerate().map(|(w, days)| {
-            let label = if days[0].month != last_month && days[0].mday <= 7 { last_month = days[0].month; MONTHS[days[0].month as usize] } else { "" };
-            v_flex().gap(px(GAP)).w(px(CELL)).flex_none()
-                .child(div().h(px(14.)).text_size(px(10.)).text_color(p.dim).whitespace_nowrap().child(label))
-                .children(days.iter().enumerate().map(|(i, d)| {
-                    let tip = if d.tot.n == 0 { format!("{}\nNothing", d.full) } else { format!("{}\n{} · {} tokens · {} calls", d.full, cost(d.tot.cost), tokens(d.tot.tokens()), d.tot.n) };
-                    div().id(("heat", w * 7 + i)).size(px(CELL)).rounded(px(3.)).bg(shade(d.tot.cost))
-                        .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
-                }))
-        }).collect::<Vec<_>>();
-        let rows = v_flex().gap(px(GAP)).w(px(28.)).flex_none().text_size(px(10.)).text_color(p.dim)
-            .child(div().h(px(14.)))
-            .children(["Mon", "", "Wed", "", "Fri", "", ""].into_iter().map(|l| div().h(px(CELL)).flex().items_center().child(l)));
-        let legend = h_flex().gap(px(3.)).items_center().text_xs().text_color(p.dim)
-            .child(div().mr_1().child("Less"))
-            .child(div().size(px(10.)).rounded(px(2.)).bg(empty_cell))
-            .children([0.3, 0.48, 0.66, 0.84, 1.].into_iter().map(move |o| div().size(px(10.)).rounded(px(2.)).bg(accent.opacity(o))))
-            .child(div().ml_1().child("More"));
-        v_flex().gap_2()
-            .child(h_flex().items_start().gap(px(GAP)).child(rows).children(cols))
-            .child(h_flex().child(div().flex_1()).child(legend))
-            .into_any_element()
+        let text = p.text;
+        for (i, d) in r.heat.iter().enumerate() {
+            let (w, dow) = ((i / 7) as f32, i % 7);
+            let x = 30. + w * (CELL + GAP);
+            let body: SharedString = if d.tot.n > 0 { format!("{} · {} tokens · {} calls", cost(d.tot.cost), tokens(d.tot.tokens()), d.tot.n).into() } else { "nothing".into() };
+            let cell = div().id(("hc", i)).absolute().left(u(x)).top(u(18. + dow as f32 * (CELL + GAP))).size(u(CELL)).rounded(u(3.))
+                .bg(heat_color(level(d.tot.cost), cx)).border(u(1.5)).border_color(text.opacity(0.)).hover(move |s| s.border_color(text));
+            svg = svg.child(self.tipped(cell, i, d.full.clone(), body, cx));
+            if dow == 0 && d.month != last_month {
+                last_month = d.month;
+                svg = svg.child(hl(cx).left(u(x)).top(u(1.)).child(MONTHS[d.month as usize]));
+            }
+        }
+        for (i, l) in ["mon", "", "wed", "", "fri", "", ""].into_iter().enumerate() {
+            if !l.is_empty() { svg = svg.child(hl(cx).left_0().top(u(18. + i as f32 * (CELL + GAP))).child(l)); }
+        }
+        let key = div().flex().gap(u(3.)).items_center().justify_end().text_size(em(cx, 0.78)).mt(u(4.)).max_w(u(900.))
+            .child(div().mx(u(4.)).text_color(p.dim).child("less"))
+            .children((0..6).map(|l| div().size(u(11.)).rounded(u(2.)).bg(heat_color(l, cx))))
+            .child(div().mx(u(4.)).text_color(p.dim).child("more"));
+        div().child(svg).child(key).into_any_element()
     }
 
-    fn breakdown(&self, id: &'static str, list: &[(String, Tot)], name: impl Fn(&str) -> (String, String), cx: &mut Context<Self>) -> AnyElement {
+    // the 30 day bars, laid out in the reference's 1000 wide viewbox and scaled to the block
+    fn bars(&self, r: &Report, width: f32, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
-        if list.is_empty() { return div().p_4().text_sm().text_color(p.dim).child("Nothing yet").into_any_element(); }
+        let by_tokens = self.tokens;
+        let val = |t: &Tot| if by_tokens { t.tokens() } else { t.cost };
+        let max = r.days30.iter().map(|d| val(&d.tot)).fold(if by_tokens { 1. } else { 0.01 }, f64::max);
+        let (w, h, pad, top) = (1000f32, 180f32, 46f32, 12f32);
+        let vh = h + 24. + top;
+        let bw = (w - pad) / 30.;
+        let s = width / w;
+        let x = |v: f32| relative(v / w);
+        let y = |v: f32| relative((v + top) / vh);
+        let fmt = |v: f64| if by_tokens { tokens(v) } else { cost(v) };
+        let hl = |cx: &App| div().absolute().text_size(u(10. * s)).line_height(u(12. * s)).text_color(pal(cx).dim).whitespace_nowrap();
+        let mut svg = div().relative().w_full().aspect_ratio(w / vh).max_h(u(240.));
+        for f in [0.5f32, 1.] {
+            let ly = h - f * h;
+            svg = svg.child(dashes(p.rule, s).absolute().left(x(pad)).right_0().top(y(ly)).h(u(1.)))
+                .child(hl(cx).left_0().top(y(ly + 4. - 10.)).child(fmt(max * f as f64)));
+        }
+        svg = svg.child(div().absolute().left(x(pad)).right_0().top(y(h)).h(u(1.)).bg(p.line));
+        let hover = p.hover;
+        for (i, d) in r.days30.iter().enumerate() {
+            let v = val(&d.tot);
+            let bh = if v > 0. { ((v / max) as f32 * (h - 6.)).max(3.) } else { 0. };
+            let bx = pad + i as f32 * bw + 1.;
+            if bh > 0. {
+                svg = svg.child(div().absolute().left(x(bx)).w(x(bw - 2.)).top(y(h - bh)).h(relative(bh / vh)).bg(p.primary).rounded_t(u(4f32.min((bw - 2.) / 2.).min(bh) * s)));
+            }
+            let body: SharedString = if d.tot.n > 0 { format!("{} · {} in · {} out · {} cached", cost(d.tot.cost), tokens(d.tot.input), tokens(d.tot.output), tokens(d.tot.cache_read)).into() } else { "nothing".into() };
+            let hit = div().id(("bar", i)).absolute().left(x(pad + i as f32 * bw)).w(x(bw)).top(y(0.)).h(relative(h / vh)).hover(move |st| st.bg(hover));
+            svg = svg.child(self.tipped(hit, 1000 + i, d.full.clone(), body, cx));
+            if i % 5 == 4 || i == 0 {
+                let (label, cx0) = if i == 29 { ("today".to_string(), w) } else { (d.label.to_string(), pad + i as f32 * bw + bw / 2.) };
+                // a 100 unit box centred on the tick (or ending at it for "today") stands in for svg's text-anchor
+                let lb = hl(cx).top(y(h + 16. - 10.)).w(x(100.)).flex();
+                svg = svg.child(if i == 29 { lb.left(x(cx0 - 100.)).justify_end() } else { lb.left(x(cx0 - 50.)).justify_center() }.child(label));
+            }
+        }
+        svg.into_any_element()
+    }
+
+    // by model / by folder: name, where, a magnitude bar, then in, out, cached and cost columns
+    fn table(&self, list: &[(String, Tot)], name: impl Fn(&str) -> (String, String), cx: &mut Context<Self>) -> AnyElement {
+        let p = pal(cx);
+        if list.is_empty() { return div().text_color(p.dim).child("nothing yet").into_any_element(); }
         let max = list.iter().map(|x| x.1.cost).fold(0.0001, f64::max);
-        let accent = cx.theme().primary;
-        let rows = list.iter().enumerate().map(|(i, (k, t))| {
-            let (title, sub) = name(k);
-            h_flex().id((id, i)).px_4().py_2().gap_4().items_center()
-                .child(v_flex().flex_1().min_w_0().gap_0p5()
-                    .child(div().text_sm().truncate().text_color(cx.theme().foreground).child(title))
-                    .child(div().text_xs().truncate().text_color(p.dim).child(sub))
-                    .child(div().mt_1().h(px(3.)).w_full().rounded_full().bg(cx.theme().muted)
-                        .child(div().h_full().rounded_full().bg(accent).w(relative((t.cost / max).clamp(0., 1.) as f32)))))
-                .child(v_flex().flex_none().w(px(72.)).items_end()
-                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child(cost(t.cost)))
-                    .child(div().text_xs().text_color(p.dim).child(tokens(t.tokens()))))
-                .into_any_element()
-        }).collect();
-        page::group(rows, cx).into_any_element()
+        let rows: Vec<(String, String, Tot)> = list.iter().map(|(k, t)| { let (a, b) = name(k); (a, b, *t) }).collect();
+        // auto table layout: columns as wide as their content, the spare width shared out in proportion
+        let ch = geo(cx).fs * 0.9 * 0.6;
+        let colw = |f: &dyn Fn(&Tot) -> String, h: &str| rows.iter().map(|r| f(&r.2).chars().count()).max().unwrap_or(0).max(h.len()) as f32 * ch + 14.;
+        let cols: [(&str, Box<dyn Fn(&Tot) -> String>); 4] = [
+            ("in", Box::new(|t: &Tot| tokens(t.input))), ("out", Box::new(|t: &Tot| tokens(t.output))),
+            ("cached", Box::new(|t: &Tot| tokens(t.cache_read))), ("cost", Box::new(|t: &Tot| cost(t.cost))),
+        ];
+        let ws: Vec<f32> = cols.iter().map(|(h, f)| colw(f.as_ref(), h)).collect();
+        let namew = rows.iter().map(|r| (r.0.chars().count() as f32 * ch).max((r.1.chars().count().min(34) as f32) * ch * 0.82 / 0.9)).fold(0., f32::max);
+        let col = |w: f32| fr(w).flex_basis(u(w)).min_w(u(w));
+        let header = div().flex().text_size(em(cx, 0.9 * 0.85)).text_color(p.dim).pb(u(4.))
+            .child(col(namew))
+            .children(cols.iter().zip(&ws).map(|((h, _), w)| col(*w).items_end().child(h.to_string())));
+        let body = rows.iter().map(|(n, sub, t)| {
+            div().flex().border_t(u(1.)).border_color(p.rule)
+                .child(col(namew).min_w_0().py(u(5.))
+                    .child(div().text_color(p.text).child(n.clone()))
+                    .child(div().text_size(em(cx, 0.9 * 0.82)).text_color(p.dim).max_w(u(34. * ch * 0.82 / 0.9)).whitespace_nowrap().overflow_hidden().text_ellipsis_start().child(sub.clone()))
+                    .child(div().h(u(4.)).mt(u(4.)).max_w(u(220.)).rounded(u(2.)).bg(p.high)
+                        .child(div().h_full().min_w(u(2.)).rounded(u(2.)).bg(p.primary).w(relative((t.cost / max) as f32)))))
+                .children(cols.iter().zip(&ws).enumerate().map(|(i, ((_, f), w))| col(*w).py(u(5.)).items_end().whitespace_nowrap()
+                    .text_color(if i == 3 { p.text } else { p.mid }).child(f(t))))
+        });
+        div().w_full().text_size(em(cx, 0.9)).child(header).children(body).into_any_element()
     }
 
-    fn sessions_table(&self, r: &Report, cx: &mut Context<Self>) -> AnyElement {
+    fn top_sessions(&self, r: &Report, cx: &mut Context<Self>) -> AnyElement {
         let p = pal(cx);
-        let mut list: Vec<&Sess> = r.sessions.iter().filter(|s| s.cost > 0. || s.tokens > 0.).collect();
-        let (by, desc) = self.sort;
-        list.sort_by(|a, b| {
-            let o = match by {
-                Sort::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
-                Sort::Calls => a.calls.cmp(&b.calls),
-                Sort::Tokens => a.tokens.total_cmp(&b.tokens),
-                Sort::Cost => a.cost.total_cmp(&b.cost),
-                Sort::Updated => a.updated.total_cmp(&b.updated),
-            };
-            if desc { o.reverse() } else { o }
-        });
-        if list.is_empty() { return div().p_4().text_sm().text_color(p.dim).child("Nothing yet").into_any_element(); }
-        let total = list.len();
-        if !self.all_sessions { list.truncate(12); }
-
-        let head = |label: &'static str, s: Sort, w: Option<f32>, cx: &mut Context<Self>| {
-            let on = by == s;
-            h_flex().id(label).gap_1().items_center().cursor_pointer()
-                .map(|d| match w { Some(w) => d.w(px(w)).flex_none().justify_end(), None => d.flex_1().min_w_0() })
-                .text_color(if on { cx.theme().foreground } else { p.dim }).hover(|st| st.text_color(cx.theme().foreground))
-                .child(label)
-                .when(on, |d| d.child(Icon::new(if desc { IconName::ArrowDown } else { IconName::ArrowUp }).xsmall()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    // a new column starts out biggest first, except names which read a to z
-                    this.sort = if this.sort.0 == s { (s, !this.sort.1) } else { (s, s != Sort::Title) };
-                    cx.notify();
-                }))
-        };
-        let header = h_flex().px_4().h(px(34.)).gap_4().items_center().text_xs().font_weight(FontWeight::MEDIUM)
-            .child(head("Session", Sort::Title, None, cx))
-            .child(head("Calls", Sort::Calls, Some(56.), cx))
-            .child(head("Tokens", Sort::Tokens, Some(72.), cx))
-            .child(head("Cost", Sort::Cost, Some(72.), cx))
-            .child(head("Last active", Sort::Updated, Some(84.), cx));
+        let mut list: Vec<&Sess> = r.sessions.iter().collect();
+        list.sort_by(|a, b| b.cost.total_cmp(&a.cost));
+        list.truncate(8);
+        if list.is_empty() { return div().text_color(p.dim).child("nothing yet").into_any_element(); }
+        let ch = geo(cx).fs * 0.92 * 0.6;
         let app = Pith::global(cx);
-        let rows = list.into_iter().map(|s| {
-            let file = s.file.clone();
-            let clickable = !file.is_empty();
-            let folder = std::path::Path::new(&s.cwd).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| tilde(&s.cwd));
-            let a = app.clone();
-            h_flex().id(SharedString::from(format!("us-{}-{}", s.file, s.title))).px_4().h(px(48.)).gap_4().items_center().border_t_1().border_color(p.hairline)
-                .when(clickable, |d| d.cursor_pointer().hover(|st| st.bg(cx.theme().muted.opacity(0.6))).on_click(move |_, _, cx| a.update(cx, |a, cx| a.open(&file, cx))))
-                .child(v_flex().flex_1().min_w_0()
-                    .child(div().text_sm().truncate().text_color(cx.theme().foreground).child(s.title.clone()))
-                    .child(div().text_xs().truncate().text_color(p.dim).child(folder)))
-                .child(div().w(px(56.)).flex_none().text_right().text_sm().text_color(p.mid).child(group_digits(s.calls)))
-                .child(div().w(px(72.)).flex_none().text_right().text_sm().text_color(p.mid).child(tokens(s.tokens)))
-                .child(div().w(px(72.)).flex_none().text_right().text_sm().font_weight(FontWeight::MEDIUM).text_color(cx.theme().foreground).child(cost(s.cost)))
-                .child(div().w(px(84.)).flex_none().text_right().text_sm().text_color(p.dim).child(if s.updated > 0. { super::workspace::ago(s.updated) } else { String::new() }))
-        });
-        let more = (total > 12).then(|| {
-            let label = if self.all_sessions { "Show fewer".to_string() } else { format!("Show all {total}") };
-            h_flex().px_4().py_2().border_t_1().border_color(p.hairline).justify_center()
-                .child(Button::new("us-more").label(label).ghost().small().on_click(cx.listener(|this, _, _, cx| { this.all_sessions = !this.all_sessions; cx.notify(); })))
-        });
-        v_flex().rounded(cx.theme().radius_lg).border_1().border_color(p.hairline).overflow_hidden()
-            .child(header).children(rows).children(more)
-            .into_any_element()
+        let hover = p.hover;
+        div().flex().flex_col().children(list.into_iter().enumerate().map(|(i, s)| {
+            let (a, file) = (app.clone(), s.file.clone());
+            div().id(("u-trow", i)).flex().gap(u(12.)).py(u(4.)).px(u(6.)).rounded(u(5.)).text_size(em(cx, 0.92)).cursor_pointer().hover(move |st| st.bg(hover))
+                .child(div().flex_1().min_w_0().truncate().child(s.title.clone()))
+                .child(div().flex_none().w(u(14. * ch)).truncate().text_color(p.dim).child(base(&s.cwd)))
+                .child(div().flex_none().w(u(8. * ch)).flex().justify_end().text_color(p.mid).child(tokens(s.tokens)))
+                .child(div().flex_none().w(u(9. * ch)).flex().justify_end().text_color(p.text).child(cost(s.cost)))
+                .on_click(move |_, _, cx| {
+                    let known = a.read(cx).sessions.iter().any(|x| x.file == file);
+                    if known && !file.is_empty() { a.update(cx, |a, cx| a.open(&file, cx)); }
+                })
+        })).into_any_element()
     }
 }
 
+// .bars .grid: a 1px rule, dashed 2 on 4 off in viewbox units
+fn dashes(color: Hsla, s: f32) -> Canvas<()> {
+    canvas(|_, _, _| (), move |b, _, window, _| {
+        let (on, step) = (px(2. * s), px(6. * s));
+        let mut x = b.origin.x;
+        while x < b.origin.x + b.size.width {
+            window.paint_quad(fill(Bounds { origin: point(x, b.origin.y), size: size(on.min(b.origin.x + b.size.width - x), b.size.height) }, color));
+            x += step;
+        }
+    })
+}
+// .u-big
+fn big(text: String, cx: &App) -> Div { div().text_size(em(cx, 1.45)).font_weight(FontWeight::BOLD).child(text) }
+// a grid track of `n` fr: grows in proportion from nothing, like grid-template-columns does
+fn fr(n: f32) -> Div { div().flex().flex_col().flex_basis(relative(0.)).flex_shrink(1.).flex_grow(n) }
+// .u-block and its .u-sec heading
+fn block(cx: &App) -> Div { let (p, g) = (pal(cx), geo(cx)); div().relative().border(u(1.)).border_color(p.line).rounded(u(g.round)).pt(u(12.)).px(u(16.)).pb(u(14.)) }
+fn sec(cx: &App) -> Div { div().flex().items_baseline().gap(u(12.)).mb(u(10.)).text_size(em(cx, 0.92)) }
+// .hc.l0 … .l5: one hue, light to dark
+fn heat_color(level: usize, cx: &App) -> Hsla {
+    let p = pal(cx);
+    match level { 0 => p.high, 5 => p.primary, l => mix(p.primary, [0.22, 0.42, 0.62, 0.82][l - 1], p.high) }
+}
 impl Render for UsagePage {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let p = pal(cx);
+        let (p, g) = (pal(cx), geo(cx));
         let Some(r) = self.report.clone() else {
-            return v_flex().size_full().items_center().justify_center().gap_2().text_sm().text_color(p.dim)
-                .child(Spinner::new().small()).child("Reading sessions…").into_any_element();
+            return page::page("usage", vec![head("usage", None, vec![], cx).into_any_element(), wide().text_color(p.dim).child("reading sessions…").into_any_element()]).into_any_element();
         };
-        let reload = Button::new("us-reload").icon(IconName::RefreshCw).label("Reload").ghost().small().loading(self.loading)
-            .on_click(cx.listener(|this, _, _, cx| this.load(cx)));
-        if r.calls == 0 {
-            return page::column("usage", 980., v_flex()
-                .child(page::intro("", reload, cx))
-                .child(empty(IconName::ChartColumn, "No usage yet", "Spend and tokens show up here once a session has talked to a model. Budgets are set in Settings.", None, cx)))
-                .into_any_element();
-        }
+        let vw = f32::from(window.viewport_size().width) / g.scale;
+        let narrow = vw < 1100.;
+        let reload = btn("us-reload", Btn::Ghost, true, cx).child(ic("refresh", cx)).child("reload").on_click(cx.listener(|this, _, _, cx| this.load(cx)));
+        let summary: SharedString = format!("{} sessions · {} model calls on record", r.sessions.len(), group_digits(r.calls as u64)).into();
         let b = Pith::global(cx).read(cx).settings["budget"].clone();
         let budget = |k: &str| b[k].as_f64().unwrap_or(0.);
-        let summary = format!("{} sessions · {} model calls · {} all time", group_digits(r.sessions.len() as u64), group_digits(r.calls as u64), cost(r.all.cost));
 
-        let strip = h_flex().rounded(cx.theme().radius_lg).border_1().border_color(p.hairline)
-            .child(self.stat("st-5h", "Last 5 hours", r.win5h, Some(budget("window5h")), r.ages_out.map(|m| if m >= 60 { format!("Oldest call ages out in {}h {}m", m / 60, m % 60) } else { format!("Oldest call ages out in {m}m") }).unwrap_or_else(|| "Nothing in the window".into()), cx))
-            .child(div().w(px(1.)).self_stretch().bg(p.hairline))
-            .child(self.stat("st-today", "Today", r.today, None, "Since midnight".into(), cx))
-            .child(div().w(px(1.)).self_stretch().bg(p.hairline))
-            .child(self.stat("st-week", "Last 7 days", r.week, Some(budget("week")), "Rolling".into(), cx))
-            .child(div().w(px(1.)).self_stretch().bg(p.hairline))
-            .child(self.stat("st-month", "This month", r.month, Some(budget("month")), format!("Resets in {}d", r.resets_in), cx));
+        let ages = r.ages_out.map(|m| format!("oldest call ages out in {m}m")).unwrap_or_else(|| "nothing in the window".into());
+        let limits = div().grid().grid_cols(if narrow { 2 } else { 3 }).gap(u(12.))
+            .child(self.limit("ul-5h", "5 hour window", r.win5h.cost, budget("window5h"), ages, cx))
+            .child(self.limit("ul-week", "last 7 days", r.week.cost, budget("week"), "rolling".into(), cx))
+            .child(self.limit("ul-month", "this month", r.month.cost, budget("month"), format!("resets in {}d", r.resets_in), cx));
 
-        let by_tokens = self.tokens;
-        let metric = page::segmented("us-metric", &["Cost", "Tokens"], by_tokens as usize, {
-            let this = cx.entity().downgrade();
-            move |i, _, cx| { let _ = this.update(cx, |t, cx| { t.tokens = i == 1; cx.notify(); }); }
-        }, cx);
-        let chart = self.chart(&r, cx);
-        let sidebar = if Pith::global(cx).read(cx).sidebar { 264. } else { 0. };
-        let width = (f32::from(window.viewport_size().width) - sidebar - 64.).min(980.);
-        let heat = self.heat(&r, width, cx);
-        let models = self.breakdown("bm", &r.by_model, |k| match k.split_once('/') { Some((prov, m)) => (m.to_string(), prov.to_string()), None => (k.to_string(), String::new()) }, cx);
-        let folders = self.breakdown("bf", &r.by_folder, |k| {
-            let name = std::path::Path::new(k).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "/".into());
-            (name, tilde(k))
-        }, cx);
-        let table = self.sessions_table(&r, cx);
+        let tile = |i: usize, label: &str, t: Tot, cx: &App| div().py(u(12.)).px(u(16.)).when(i > 0, |d| d.border_l(u(1.)).border_color(p.rule))
+            .child(div().text_size(em(cx, 0.82)).text_color(p.dim).child(label.to_string()))
+            .child(big(cost(t.cost), cx))
+            .child(div().text_size(em(cx, 0.84)).text_color(p.dim).child(format!("{} tokens · {} calls", tokens(t.tokens()), group_digits(t.n))));
+        let tiles = div().grid().grid_cols(if narrow { 2 } else { 4 }).border(u(1.)).border_color(p.line).rounded(u(g.round))
+            .child(tile(0, "today", r.today, cx)).child(tile(1, "7 days", r.week, cx)).child(tile(2, "30 days", r.d30, cx)).child(tile(3, "all time", r.all, cx));
 
-        page::column("usage", 980., v_flex()
-            .child(page::intro(summary, reload, cx))
-            .child(div().mt_3().child(strip))
-            .child(h_flex().mt_8().mb_3().items_center()
-                .child(div().flex_1().text_sm().font_weight(FontWeight::SEMIBOLD).child(if by_tokens { "Tokens, last 30 days" } else { "Spend, last 30 days" }))
-                .child(metric))
-            .child(chart)
-            .child(heading("Every day", cx)).child(heat)
-            .child(h_flex().gap_6().items_start()
-                .child(v_flex().flex_1().min_w_0().child(heading("By model", cx)).child(models))
-                .child(v_flex().flex_1().min_w_0().child(heading("By folder", cx)).child(folders)))
-            .child(heading("Sessions", cx)).child(table))
-            .into_any_element()
+        let tokens_on = self.tokens;
+        let this = cx.entity().downgrade();
+        let metric = page::segs("us-metric", &["cost", "tokens"], tokens_on as usize, move |i, _, cx| { let _ = this.update(cx, |t, cx| { t.tokens = i == 1; cx.notify(); }); }, cx);
+        // the block's inner width: the main window less the page's padding and the block's own
+        let main_w = vw - 2. * g.gap - if Pith::global(cx).read(cx).sidebar { 264. + g.gap } else { 0. } - 2. * g.bw;
+        let inner = (main_w - 68.).min(page::MAX_W) - 34.;
+        let models = self.table(&r.by_model, |k| (k.split_once('/').map(|x| x.1).unwrap_or(k).to_string(), k.split('/').next().unwrap_or("").to_string()), cx);
+        let folders = self.table(&r.by_folder, |k| { let b = base(k); (if b.is_empty() { "/".into() } else { b }, tilde(k)) }, cx);
+
+        let mut kids: Vec<AnyElement> = vec![
+            head("usage", Some(summary), vec![reload.into_any_element()], cx).into_any_element(),
+            wide().mb(u(22.)).child(limits).into_any_element(),
+            wide().mb(u(22.)).child(tiles).into_any_element(),
+        ];
+        if let Some(c) = self.current(narrow, cx) { kids.push(wide().child(c).into_any_element()); }
+        kids.push(wide().child(block(cx).mb(u(22.))
+            .child(sec(cx).child(div().child("every day, last 26 weeks")).child(div().text_color(p.dim).child("darker is more spend")))
+            .child(self.heat(&r, cx))).into_any_element());
+        kids.push(wide().child(block(cx).mb(u(22.))
+            .child(sec(cx).items_center().child(div().child("last 30 days")).child(div().flex_1()).child(metric))
+            .child(self.bars(&r, inner, cx))).into_any_element());
+        let col = |title: &str, body: AnyElement, cx: &App| block(cx).min_w_0().child(sec(cx).child(title.to_string())).child(body);
+        kids.push(wide().mb(u(22.)).child(div().grid().grid_cols(if narrow { 1 } else { 2 }).gap(u(14.))
+            .child(col("by model", models, cx)).child(col("by folder", folders, cx))).into_any_element());
+        kids.push(wide().child(block(cx).mb(u(22.)).child(sec(cx).child("most expensive sessions")).child(self.top_sessions(&r, cx))).into_any_element());
+
+        let tip = self.tip.clone().map(|t| deferred(anchored().position(t.at + point(px(14.), px(14.))).snap_to_window_with_margin(px(8.)).child(
+            div().py(u(6.)).px(u(10.)).bg(p.raised).border(u(1.)).border_color(p.line).rounded(u(g.r2)).text_size(em(cx, 0.84)).max_w(u(280.)).shadow_lg()
+                .child(div().font_weight(FontWeight::BOLD).mb(u(2.)).child(t.title)).child(div().child(t.body)))).with_priority(1));
+        div().size_full().child(page::page("usage", kids)).children(tip).into_any_element()
     }
 }
