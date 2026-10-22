@@ -3,3 +3,4 @@ dist
 release
 result
 native/target
+.claude/
