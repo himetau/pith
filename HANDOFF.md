@@ -38,7 +38,9 @@ children, so a window's border is its own `edge()` layer under the legends. The 
 ## pi
 pi_agent_rust, a release binary pinned in `scripts/fetch-pi.sh` and `flake.nix` (same version, same sums). It goes in
 `lib/pith/pi` beside the app (`install-desktop.sh`, the flake), or `native/target/pi/pi` for a dev build (`dev/run.sh`
-fetches it); `sys::pi_bin` picks, `piPath` overrides. Its rpc is the node pi's with differences pith works around:
+fetches it); `sys::pi_bin` picks, `piPath` overrides. `fetch-pi.sh <dir> --build` (and `install-desktop.sh --build`)
+builds the same tag without the bpe token tables and the second tui instead: ~40MB less per session after its first
+reply, tokens estimated as bytes/4 until the provider reports usage. Its rpc is the node pi's with differences pith works around:
 - `set_output_mode compact` right after start: a streaming update carries its delta only. pi can drop deltas when its
   stdout backs up, so the `*_end` events and `message_end` set each block whole. A tool call only gets its id at
   `toolcall_end`, it streams in under a stand-in key until then.

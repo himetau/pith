@@ -1,7 +1,8 @@
 #!/bin/bash
 # puts pith in app launchers (quickshell, rofi): the release build, an icon in the hicolor theme and a .desktop entry.
 # the binary gets copied out of the repo with ext/, prompts/ and pi (pi_agent_rust) next to it, where pith looks for them,
-# so switching branches or cleaning target/ doesn't take the launcher down. it builds the release first
+# so switching branches or cleaning target/ doesn't take the launcher down. it builds the release first.
+#   scripts/install-desktop.sh [--build]   --build builds a leaner pi instead of fetching it, see fetch-pi.sh
 set -e
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
@@ -14,7 +15,7 @@ mkdir -p "$lib"
 cp "$bin" "$lib/.pith.new" && mv -f "$lib/.pith.new" "$lib/pith"
 rm -rf "$lib/ext" "$lib/prompts"
 cp -r "$repo/ext" "$repo/prompts" "$lib/"
-"$repo/scripts/fetch-pi.sh" "$lib"
+"$repo/scripts/fetch-pi.sh" "$lib" "$@"
 
 # launchers look icons up by name, so it goes in the theme instead of being referenced by path.
 # each size is rendered on its own, a voxel icon scaled down from 1024 goes to mush
