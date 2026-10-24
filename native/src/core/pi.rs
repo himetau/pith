@@ -11,7 +11,9 @@ pub struct PiProc {
     stdin: Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
     seq: AtomicU64,
-    pub stderr: Arc<Mutex<String>>,
+    stderr: Arc<Mutex<String>>,
+    // pi's own word on why it's exiting ({"type":"error"} on stdout), better than stderr's last lines
+    fatal: Arc<Mutex<Option<String>>>,
     pub exited: Arc<AtomicBool>,
     pub pid: u32,
 }
@@ -33,6 +35,7 @@ impl PiProc {
             pending: Mutex::new(HashMap::new()),
             seq: AtomicU64::new(0),
             stderr: Arc::new(Mutex::new(String::new())),
+            fatal: Arc::new(Mutex::new(None)),
             exited: Arc::new(AtomicBool::new(false)),
             pid: child.id(),
         });
@@ -48,6 +51,7 @@ impl PiProc {
                 while buf.last().is_some_and(|b| *b == b'\n' || *b == b'\r') { buf.pop(); }
                 if buf.is_empty() { continue; }
                 let Ok(rec) = serde_json::from_slice::<Value>(&buf) else { continue };
+                if rec["type"] == "error" { *me.fatal.lock().unwrap() = rec["message"].as_str().map(String::from); continue; }
                 if rec["type"] == "response" {
                     if let Some(id) = rec["id"].as_str() {
                         if let Some(tx) = me.pending.lock().unwrap().remove(id) { let _ = tx.send(rec); continue; }
@@ -74,10 +78,15 @@ impl PiProc {
             let code = child.wait().ok().and_then(|s| s.code());
             me.exited.store(true, Ordering::SeqCst);
             for (_, tx) in me.pending.lock().unwrap().drain() { let _ = tx.send(json!({ "type": "response", "success": false, "error": "pi exited" })); }
-            let err = me.stderr.lock().unwrap().clone();
+            let err = me.fatal.lock().unwrap().clone().unwrap_or_else(|| me.stderr.lock().unwrap().clone());
             on_exit(code, err);
         });
         Ok(proc)
+    }
+
+    // why it died: pi's error record if it sent one, else the end of stderr
+    pub fn last_words(&self) -> String {
+        self.fatal.lock().unwrap().clone().unwrap_or_else(|| self.stderr.lock().unwrap().trim().to_string())
     }
 
     fn write(&self, v: &Value) -> bool {
@@ -102,9 +111,10 @@ impl PiProc {
         rx.await.unwrap_or_else(|_| json!({ "type": "response", "success": false, "error": "pi went away" }))
     }
 
-    pub fn ui_response(&self, id: &str, payload: Value) {
-        let mut v = json!({ "type": "extension_ui_response", "id": id });
-        if let (Some(o), Value::Object(p)) = (v.as_object_mut(), payload) { for (k, x) in p { o.insert(k, x); } }
+    // answers an ask_request (a tool's approval, the ask tool). pi's {resolved} reply isn't needed
+    pub fn ask_response(&self, mut v: Value) {
+        v["type"] = json!("ask_response");
+        v["id"] = json!(format!("a{}", self.seq.fetch_add(1, Ordering::SeqCst) + 1));
         self.write(&v);
     }
 

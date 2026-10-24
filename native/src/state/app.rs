@@ -6,7 +6,7 @@ use gpui_kit::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -52,18 +52,18 @@ pub struct Pith {
 struct Global_(Entity<Pith>);
 impl Global for Global_ {}
 
-static MODES: Mutex<Option<HashMap<String, Mode>>> = Mutex::new(None);
-pub fn set_mode(tab: &str, m: Mode) { MODES.lock().unwrap().get_or_insert_with(HashMap::new).insert(tab.into(), m); }
-fn mode_of(tab: &str) -> Mode { MODES.lock().unwrap().as_ref().and_then(|m| m.get(tab).copied()).unwrap_or(Mode::Ask) }
 
-// ext/ and prompts/ ship next to the binary, or in ../lib/pith for the nix and deb layouts. a dev build reads the repo
+// pi's default tools plus subagent, which it leaves out unless asked for
+const TOOLS: &str = "read,bash,edit,write,grep,find,ls,hashline_edit,web_search,ast_grep,ast_edit,lsp,debug,ask,todo,submit_plan,jobs,hub,current_time,subagent";
+
+// ext/, prompts/ and pi ship next to the binary, or in ../lib/pith for the nix and deb layouts. a dev build reads the repo
 pub fn res() -> &'static PathBuf {
     static RES: OnceLock<PathBuf> = OnceLock::new();
     RES.get_or_init(|| {
         let exe = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
         let lib = exe.as_ref().map(|d| d.join("../lib/pith"));
         let mac = exe.as_ref().map(|d| d.join("../Resources"));
-        [exe, lib, mac].into_iter().flatten().find(|d| d.join("ext/pith-bridge.ts").exists())
+        [exe, lib, mac].into_iter().flatten().find(|d| d.join("ext/pith.js").exists())
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".."))
     })
 }
@@ -74,13 +74,20 @@ impl Pith {
     pub fn init(cx: &mut App) {
         let (tx, rx) = async_channel::unbounded::<Msg>();
         let btx = tx.clone();
-        let (url, token) = bridge::start(move |tab, op, args| match op.as_str() {
-            "mode" => Ok(json!({ "mode": mode_of(&tab).as_str() })),
-            "preview" => { let _ = btx.send_blocking(Msg::Preview(tab, args)); Ok(json!({})) }
-            "image-settings" => {
-                let s = sys::load_settings();
-                Ok(json!({ "model": s["imageModel"], "provider": s["imageProvider"], "dir": sys::images_dir(), "pi": s["piPath"], "cost": s["imageCost"] }))
+        let url = bridge::start(move |tab, op, args| match op.as_str() {
+            "preview" => {
+                let mut a = args;
+                if let Some(p) = a["path"].as_str() {
+                    let path = std::path::Path::new(a["cwd"].as_str().unwrap_or("")).join(p);
+                    if !path.exists() { return Err(format!("{} doesn't exist yet, write it first", path.display())); }
+                    a["path"] = json!(path);
+                } else if a["url"].as_str().is_none() { return Err("give a path or a url".into()); }
+                let shown = a["path"].as_str().or(a["url"].as_str()).unwrap_or("").to_string();
+                let path = a["path"].clone();
+                let _ = btx.send_blocking(Msg::Preview(tab, a));
+                Ok(json!({ "shown": shown, "path": path }))
             }
+            "generate-image" => crate::core::imagegen::for_agent(&args),
             "browser" => {
                 // the user should see the agent drive it
                 let _ = btx.send_blocking(Msg::Browser(tab.clone()));
@@ -90,16 +97,19 @@ impl Pith {
             _ => Err(format!("unknown op {op}")),
         });
         let spawner: Spawner = Arc::new(move |tab: &str, cwd: &str, session: Option<&str>, kind: Kind, mode: Mode| {
-            set_mode(tab, mode);
             let settings = sys::load_settings();
             let p = |s: &str| res().join(s).display().to_string();
-            let mut args = vec!["-e".into(), p("ext/pith-bridge.ts"), "--append-system-prompt".into(), p("prompts/pith.md"), "--prompt-template".into(), p("prompts/commands")];
+            // global extensions are for pi's own tui; pith brings the one it needs
+            let mut args = vec!["--no-extensions".into(), "-e".into(), p("ext/pith.js"), "--tools".into(), TOOLS.into(),
+                "--append-system-prompt".into(), p("prompts/pith.md"), "--prompt-template".into(), p("prompts/commands")];
             if kind == Kind::Design { args.extend(["--append-system-prompt".into(), p("prompts/design-system.md")]); }
+            if mode == Mode::Plan { args.push("--plan-mode".into()); }
             if let Some(f) = session { args.extend(["--session".into(), f.into()]); }
             args.extend(split_args(settings["extraArgs"].as_str().unwrap_or("")));
             let _ = std::fs::create_dir_all(cwd);
-            let env = vec![("PITH_BRIDGE".into(), url.clone()), ("PITH_TOKEN".into(), token.clone()), ("PITH_TAB".into(), tab.into()), ("PITH_KIND".into(), kind.as_str().into())];
-            let bin = settings["piPath"].as_str().filter(|s| !s.is_empty()).unwrap_or("pi").to_string();
+            // pi's js runtime only fetches https unless loopback is allowed, and the bridge is plain http on 127.0.0.1
+            let env = vec![("PITH_BRIDGE".into(), url.clone()), ("PITH_TAB".into(), tab.into()), ("PITH_KIND".into(), kind.as_str().into()), ("PI_HTTP_ALLOW_LOOPBACK".into(), "1".into())];
+            let bin = sys::pi_bin(&settings);
             let (t1, t2, tx1, tx2) = (tab.to_string(), tab.to_string(), tx.clone(), tx.clone());
             PiProc::spawn(&bin, &args, cwd, &env,
                 move |rec| { let _ = tx1.send_blocking(Msg::Rec(t1.clone(), rec)); },
@@ -168,11 +178,7 @@ impl Pith {
 
     fn add(&mut self, t: Tab, cx: &mut Context<Self>) -> Entity<Tab> {
         let tab = cx.new(|_| t);
-        let sub = cx.subscribe(&tab, |app, _tab, ev: &TabEvent, cx| match ev {
-            TabEvent::Toast(l, t) => app.toast(*l, t.clone(), cx),
-            TabEvent::Settled => { app.refresh_sessions(cx); app.trim(cx); }
-            _ => {}
-        });
+        let sub = cx.subscribe(&tab, |app, _tab, ev: &TabEvent, cx| if let TabEvent::Settled = ev { app.refresh_sessions(cx); app.trim(cx); });
         self._subs.insert(tab.entity_id(), sub);
         // tabs repaint the sidebar too: titles, the running dot, unread
         cx.observe(&tab, |_, _, cx| cx.notify()).detach();
@@ -184,7 +190,6 @@ impl Pith {
         tab.update(cx, |t, cx| {
             t.unread = false;
             t.last_used = Instant::now();
-            // a watched subagent run is read off disk, its own process has it
             if t.watch { t.peek(cx); }
             else if t.status == super::tab::Status::Cold { let _ = t.ensure(cx); }
             cx.notify();
@@ -207,7 +212,7 @@ impl Pith {
         let cwd = if info.cwd.is_empty() { self.home_cwd.clone() } else { info.cwd.clone() };
         let tab = self.add(Tab::new(cwd, Some(file.to_string()), kind, mode, info.name.clone(), self.spawner.clone()), cx);
         let f = file.to_string();
-        let disk = cx.background_spawn(async move { sys::agent_session(&f) });
+        let disk = cx.background_spawn(async move { sys::session_entries(&f) });
         let weak = tab.downgrade();
         cx.spawn(async move |_, cx| {
             let d = disk.await;
@@ -216,14 +221,7 @@ impl Pith {
         self.focus(tab, cx);
     }
 
-    // a subagent's session from a link in the chat (its card in a tool row, a todo that matches its task):
-    // watched off disk while the hub says it runs, an ordinary session otherwise
-    pub fn open_agent_run(&mut self, file: &str, cx: &mut Context<Self>) {
-        let q = super::hub::AgentRef { session_file: Some(file.to_string()), ..Default::default() };
-        match self.agent_run(&q, cx) { Some(run) => { self.open_agent(run, cx); } None => self.open(file, cx) }
-    }
-
-    // a subagent's run as its own tab you can watch, and carry on in once it's done (app.openAgent)
+    // a subagent's run as its own tab, its transcript replayed and followed while it runs (app.openAgent)
     pub fn open_agent(&mut self, run: super::hub::AgentRun, cx: &mut Context<Self>) -> Entity<Tab> {
         if let Some(t) = self.tabs.iter().find(|t| t.read(cx).file.as_deref() == Some(run.file.as_str())).cloned() { self.focus(t.clone(), cx); return t; }
         let cwd = if run.cwd.is_empty() { self.active.as_ref().map(|t| t.read(cx).cwd.clone()).unwrap_or_else(|| self.home_cwd.clone()) } else { run.cwd.clone() };
@@ -234,16 +232,21 @@ impl Pith {
         // keep whatever side pane you opened it from, usually the agents list
         t.pane = self.active.as_ref().and_then(|a| a.read(cx).pane);
         let tab = self.add(t, cx);
+        // the transcript grows while the child works; a re-read when it changes, until it says it's done
+        let weak = tab.downgrade();
+        cx.spawn(async move |_, cx| {
+            let mut seen = 0u64;
+            loop {
+                let f = run.file.clone();
+                let len = cx.background_spawn(async move { std::fs::metadata(&f).map(|m| m.len()).unwrap_or(0) }).await;
+                let Ok(going) = weak.update(cx, |t, cx| { if len != seen { t.peek(cx); } t.agent_running }) else { break };
+                seen = len;
+                if !going && !weak.update(cx, |t, _| t.peeking).unwrap_or(false) { break; }
+                cx.background_executor().timer(std::time::Duration::from_millis(300)).await;
+            }
+        }).detach();
         self.focus(tab.clone(), cx);
         tab
-    }
-
-    // a subagent run by what's known about it, ready to open; None when it has no session to show
-    #[allow(dead_code)]
-    pub fn agent_run(&self, q: &super::hub::AgentRef, cx: &App) -> Option<super::hub::AgentRun> {
-        let mut run = super::hub::Hub::global(cx).read(cx).find(q)?;
-        if run.cwd.is_empty() { run.cwd = self.active.as_ref().map(|t| t.read(cx).cwd.clone()).unwrap_or_else(|| self.home_cwd.clone()); }
-        Some(run)
     }
 
     // the side window for one session: open on a pane, or closed with None (t.pane / act.openPane)

@@ -9,10 +9,27 @@
       systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ];
       each = f: lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
+      # the agent is pi_agent_rust, the native port of pi, from its release builds (scripts/fetch-pi.sh pins the same one)
+      piVersion = "0.8.0";
+      piAssets = {
+        x86_64-linux = { name = "pi-linux-amd64"; hash = "sha256-wE5/hzkb7LF8sex1RND9dnIx37WoNhZE6ohwuj05BW0="; };
+        aarch64-linux = { name = "pi-linux-arm64"; hash = "sha256-MnZQTRlVTXqoryJwNnQYa5iHxIz/wc0SOLe/UjEAq/k="; };
+        aarch64-darwin = { name = "pi-darwin-arm64"; hash = "sha256-mZnuWwUoOnmydxYvc535/zay/w+Nymzx1sxOGq5dBdk="; };
+      };
+      mkPi = pkgs: let a = piAssets.${pkgs.stdenv.hostPlatform.system}; in pkgs.stdenvNoCC.mkDerivation {
+        pname = "pi-agent-rust";
+        version = piVersion;
+        src = pkgs.fetchurl { url = "https://github.com/Dicklesworthstone/pi_agent_rust/releases/download/v${piVersion}/${a.name}.tar.xz"; inherit (a) hash; };
+        sourceRoot = ".";
+        nativeBuildInputs = pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [ pkgs.autoPatchelfHook ];
+        installPhase = "install -Dm755 pi $out/bin/pi";
+      };
+
       # gpui draws the ui, no webview. gpui dlopens vulkan, wayland and xkbcommon at runtime,
       # so they go on the rpath. on macos the metal shaders compile at startup, a nix build has no metal compiler
       mkPith = pkgs: with pkgs; let
-        path = lib.makeBinPath [ pi-coding-agent git ];
+        pi = mkPi pkgs;
+        path = lib.makeBinPath [ git ];
         runtimeLibs = [ vulkan-loader wayland libxkbcommon xorg.libX11 xorg.libxcb xorg.libXcursor xorg.libXi libGL ];
       in rustPlatform.buildRustPackage {
         pname = "pith";
@@ -38,10 +55,11 @@
           ++ lib.optionals stdenv.hostPlatform.isDarwin [ apple-sdk_15 ];
         runtimeDependencies = lib.optionals stdenv.hostPlatform.isLinux runtimeLibs;
 
-        # ext/ and prompts/ go in lib/pith beside bin/, which pith checks for
+        # ext/, prompts/ and pi go in lib/pith beside bin/, where pith looks for them
         postInstall = ''
           mkdir -p $out/lib/pith
           cp -r ext prompts $out/lib/pith/
+          ln -s ${pi}/bin/pi $out/lib/pith/pi
         '' + lib.optionalString stdenv.hostPlatform.isDarwin ''
           wrapProgram $out/bin/pith --suffix PATH : ${path}
         '' + lib.optionalString stdenv.hostPlatform.isLinux ''
@@ -60,11 +78,11 @@
         };
       };
     in {
-      packages = each (pkgs: rec { pith = mkPith pkgs; default = pith; });
+      packages = each (pkgs: rec { pith = mkPith pkgs; pi = mkPi pkgs; default = pith; });
       devShells = each (pkgs: {
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.pith ];
-          packages = [ pkgs.pi-coding-agent ];
+          packages = [ self.packages.${pkgs.stdenv.hostPlatform.system}.pi ];
         };
       });
     };

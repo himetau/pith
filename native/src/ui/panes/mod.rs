@@ -226,7 +226,7 @@ impl SidePanel {
         let app = Pith::global(cx);
         let tab = app.read(cx).active.clone();
         let cur = tab.as_ref().and_then(|t| t.read(cx).pane);
-        let running = Hub::global(cx).read(cx).running_count();
+        let running = Hub::running_count(cx);
         let fs = geo(cx).fs * 0.84;
         let l = legend(Side::L, p.gutter, cx).children(PANES.iter().map(|&(pane, label, keys)| {
             let (app, tab) = (app.clone(), tab.clone());

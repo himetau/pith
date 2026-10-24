@@ -1,4 +1,4 @@
-// Agent definitions the subagent extension reads (~/.pi/agent/agents, .pi/agents), and summoning them (agents.ts).
+// Agent definitions pi's subagent tool reads (~/.pi/agent/agents, .pi/agents), and summoning them (agents.ts).
 // a 300px list on the left, the one you picked in an editor on the right
 use super::page::{self, btn, head, ic, legend_box, s_box, s_in, wide, Btn};
 use super::panes::Pane;
@@ -13,7 +13,6 @@ use gpui_kit::prelude::FluentBuilder as _;
 use serde_json::{json, Value};
 
 const TOOLS: &str = "read, grep, find, ls, bash";
-const RUNNING: [&str; 4] = ["spawning", "thinking", "tool", "streaming"];
 
 pub struct AgentsPage {
     defs: Vec<Value>,
@@ -61,12 +60,12 @@ impl AgentsPage {
         let cwd = Pith::global(cx).read(cx).active.as_ref().map(|t| t.read(cx).cwd.clone());
         self.cwd = cwd.clone();
         cx.spawn(async move |this, cx| {
-            let (defs, hub) = cx.background_spawn(async move { (sys::agent_defs(cwd.as_deref()), sys::read_agent_hub()) }).await;
+            let defs = cx.background_spawn(async move { sys::agent_defs(cwd.as_deref()) }).await;
             let _ = this.update(cx, |this, cx| {
                 // an agent deleted on disk while it was open goes back to the empty state
                 if let Some((f, _)) = &this.sel { if !f.is_empty() && !defs.iter().any(|d| d["file"].as_str() == Some(f)) { this.sel = None; } }
                 this.defs = defs;
-                this.running = hub["agents"].as_array().map(|a| a.iter().filter(|x| RUNNING.contains(&x["status"].as_str().unwrap_or(""))).count()).unwrap_or(0);
+                this.running = crate::state::hub::Hub::running_count(cx);
                 cx.notify();
             });
         }).detach();
@@ -106,7 +105,7 @@ impl AgentsPage {
         let task = self.task.read(cx).value().trim().to_string();
         if task.is_empty() { self.task.update(cx, |s, cx| s.focus(window, cx)); return; }
         let name = self.name.read(cx).value().trim().to_string();
-        tab.update(cx, |t, cx| t.send(format!("/summon {name} {task}"), vec![], How::Auto, cx));
+        tab.update(cx, |t, cx| t.send(format!("Run the {name} agent with the subagent tool on this task:\n\n{task}"), vec![], How::Auto, cx));
         live_view(cx);
     }
 

@@ -375,7 +375,7 @@ fn body(tb: &ToolBlock, kind: Body, ui: &Ui, cx: &App) -> Option<AnyElement> {
             todo_list_for(&id, todos.iter().map(|(a, b)| (a.as_str(), b.as_str())), Some(ui.tab), cx).into_any_element()
         }
         Body::Findings => findings(tb, ui, cx),
-        Body::Agents => agents(tb, cx),
+        Body::Agents => agents(tb, ui.tab, cx),
         Body::Other => {
             let im = images_of(r);
             col.child(cmd_view(format!("{id}-args"), &serde_json::to_string_pretty(&tb.args).unwrap_or_default(), None, cx))
@@ -387,43 +387,11 @@ fn body(tb: &ToolBlock, kind: Body, ui: &Ui, cx: &App) -> Option<AnyElement> {
 
 // ---------- subagent runs you can open ----------
 
-// the hub file is read at most every couple of seconds, the transcript asks on every frame
-fn hub(cx: &App) -> Value {
-    thread_local! { static HUB: std::cell::RefCell<(Option<std::time::Instant>, Value)> = const { std::cell::RefCell::new((None, Value::Null)) }; }
-    let _ = cx;
-    HUB.with(|h| {
-        let mut h = h.borrow_mut();
-        if h.0.is_none_or(|t| t.elapsed().as_secs() >= 2) { *h = (Some(std::time::Instant::now()), crate::core::sys::read_agent_hub()); }
-        h.1.clone()
-    })
-}
+fn open_run(run: crate::state::hub::AgentRun) -> OnClick { Rc::new(move |_, cx| { let r = run.clone(); Pith::global(cx).update(cx, |a, cx| { a.open_agent(r, cx); }); }) }
 
-// act.agentRun: the session file of a run, from its result or the hub; no file, nothing to open
-fn agent_file(file: Option<&str>, hub_id: Option<i64>, task: &str, cx: &App) -> Option<String> {
-    if let Some(f) = file.filter(|f| !f.is_empty()) { return Some(f.to_string()); }
-    let h = hub(cx);
-    h["agents"].as_array()?.iter()
-        .filter(|a| hub_id.is_some_and(|i| a["id"].as_i64() == Some(i)) || (!task.is_empty() && a["task"].as_str() == Some(task)))
-        .max_by(|a, b| a["startedAt"].as_f64().unwrap_or(0.).total_cmp(&b["startedAt"].as_f64().unwrap_or(0.)))
-        .and_then(|a| a["sessionFile"].as_str()).filter(|f| !f.is_empty()).map(String::from)
-}
-
-fn open_run(file: String) -> OnClick { Rc::new(move |_, cx| { let f = file.clone(); Pith::global(cx).update(cx, |a, cx| a.open_agent_run(&f, cx)); }) }
-
-// every subagent run this session started, newest last: (task, session file, hub id)
-fn runs_in(tab: &Tab) -> Vec<(String, Option<String>, Option<i64>)> {
-    let mut out = vec![];
-    for it in &tab.items {
-        let crate::state::tab::ItemKind::Assistant(a) = &it.kind else { continue };
-        for b in a.blocks.iter().flatten() {
-            let crate::state::tab::Block::Tool(id) = b else { continue };
-            let Some(tb) = tab.tools.get(id).filter(|t| t.name == "subagent" || t.name == "summon_agent") else { continue };
-            let results = tb.result.as_ref().or(tb.partial.as_ref()).and_then(|r| r.details["results"].as_array()).cloned().unwrap_or_default();
-            if results.is_empty() { out.extend(planned(&tb.args).into_iter().filter(|x| !x.1.is_empty()).map(|(_, t)| (t, None, None))); }
-            else { out.extend(results.iter().filter_map(|r| Some((r["task"].as_str()?.to_string(), r["sessionFile"].as_str().map(String::from), r["hubId"].as_i64())))); }
-        }
-    }
-    out
+// every subagent run this session started that has a transcript to open: (task, run)
+fn runs_in(tab: &Tab, cx: &App) -> Vec<(String, crate::state::hub::AgentRun)> {
+    tab.subruns.iter().filter_map(|r| Some((r["task"].as_str()?.to_string(), crate::state::hub::AgentRun::of(r, cx)?))).collect()
 }
 
 // a todo and a delegated task are the same work when most of the todo's words are in the task. no match, no link
@@ -431,7 +399,7 @@ fn words(s: &str) -> HashSet<String> {
     let s = s.to_lowercase();
     s.split(|c: char| !(c.is_ascii_alphanumeric() || "_./-".contains(c))).filter(|w| w.len() >= 3).map(String::from).collect()
 }
-fn agent_for_todo(todo: &str, runs: &[(String, Option<String>, Option<i64>)], cx: &App) -> Option<OnClick> {
+fn agent_for_todo(todo: &str, runs: &[(String, crate::state::hub::AgentRun)]) -> Option<OnClick> {
     let tw = words(todo);
     if tw.is_empty() { return None; }
     let mut best = None;
@@ -441,22 +409,21 @@ fn agent_for_todo(todo: &str, runs: &[(String, Option<String>, Option<i64>)], cx
         let s = tw.iter().filter(|w| rw.contains(*w)).count() as f32 / tw.len() as f32;
         if s >= score { best = Some(r); score = s; }
     }
-    let r = best.filter(|_| score >= 0.6)?;
-    agent_file(r.1.as_deref(), r.2, &r.0, cx).map(open_run)
+    best.filter(|_| score >= 0.6).map(|r| open_run(r.1.clone()))
 }
 
 // ul.todos: a box per todo (a tick, a spinner, or empty) and its text; one that matches a subagent run opens it
 pub fn todo_list<'a>(todos: impl IntoIterator<Item = (&'a str, &'a str)>, cx: &App) -> Div { todo_list_for("todos", todos, None, cx) }
 pub fn todo_list_for<'a>(key: &str, todos: impl IntoIterator<Item = (&'a str, &'a str)>, tab: Option<&Entity<Tab>>, cx: &App) -> Div {
     let p = pal(cx);
-    let runs = tab.map(|t| runs_in(t.read(cx))).unwrap_or_default();
+    let runs = tab.map(|t| runs_in(t.read(cx), cx)).unwrap_or_default();
     div().flex().flex_col().children(todos.into_iter().enumerate().map(|(i, (text, status))| {
         let tc = match status { "completed" => p.dim, "in_progress" => p.text, _ => p.mid };
         let bx = div().flex_none().size(u(14.)).flex().items_center().justify_center().rounded(u(3.)).text_size(em(cx, 0.8)).text_color(p.accent)
             .when(status == "completed", |d| d.bg(p.sel).child(Icon::new(IconName::Check).size(u(11.))))
             .when(status != "completed", |d| d.border(u(1.)).border_color(p.line))
             .when(status == "in_progress", |d| d.child(super::frame::spin(SharedString::from(format!("{key}-sp{i}")))));
-        let link = (!runs.is_empty()).then(|| agent_for_todo(text, &runs, cx)).flatten();
+        let link = (!runs.is_empty()).then(|| agent_for_todo(text, &runs)).flatten();
         let mut st = HighlightStyle::default();
         if status == "completed" { st.strikethrough = Some(StrikethroughStyle { thickness: px(1.), color: Some(p.dim.opacity(0.6)) }); }
         if link.is_some() { st.underline = Some(UnderlineStyle { thickness: px(1.), color: Some(tc.opacity(0.4)), wavy: false }); }
@@ -506,48 +473,42 @@ fn findings(tb: &ToolBlock, ui: &Ui, cx: &App) -> AnyElement {
     col.into_any_element()
 }
 
-// .agent-cards: one per delegated task, its head opens the run's session
-fn agents(tb: &ToolBlock, cx: &App) -> AnyElement {
+// .agent-cards: one per delegated task, live from what pi reports on the call (Tab::subruns); a head opens the
+// run's transcript
+fn agents(tb: &ToolBlock, tab: &Entity<Tab>, cx: &App) -> AnyElement {
     let p = pal(cx);
     let g = geo(cx);
-    let r = tb.result.as_ref().or(tb.partial.as_ref());
-    let results = r.and_then(|r| r.details["results"].as_array()).cloned().unwrap_or_default();
+    let prefix = format!("{}/{}/", tab.read(cx).id, tb.id);
+    let runs: Vec<Value> = tab.read(cx).subruns.iter().filter(|r| r["key"].as_str().is_some_and(|k| k.starts_with(&prefix))).cloned().collect();
     let planned = planned(&tb.args);
-    let running = matches!(tb.status, ToolStatus::Running | ToolStatus::Queued);
-    let n = if results.is_empty() { planned.len() } else { results.len() };
+    let n = runs.len().max(planned.len());
     let mut col = div().flex().flex_col().gap(u(6.)).py(u(2.));
     for i in 0..n {
-        let res = results.get(i).cloned().unwrap_or(Value::Null);
+        let res = runs.get(i).cloned().unwrap_or(Value::Null);
         let agent = res["agent"].as_str().map(String::from).or_else(|| planned.get(i).map(|x| x.0.clone())).unwrap_or_default();
         let task = res["task"].as_str().map(String::from).or_else(|| planned.get(i).map(|x| x.1.clone())).unwrap_or_default();
-        let (mut last, mut doing) = (String::new(), String::new());
-        for m in res["messages"].as_array().into_iter().flatten().filter(|m| m["role"] == "assistant") {
-            for c in m["content"].as_array().into_iter().flatten() {
-                if c["type"] == "text" { if let Some(t) = c["text"].as_str().filter(|t| !t.is_empty()) { last = t.to_string(); } }
-                if c["type"] == "toolCall" { let a = &c["arguments"]; doing = format!("{} {}", c["name"].as_str().unwrap_or(""), one(a["path"].as_str().or(a["command"].as_str()).or(a["pattern"].as_str()).unwrap_or(""), 60)); }
-            }
-        }
-        let failed = res["exitCode"].as_i64().is_some_and(|e| e > 0) || matches!(res["stopReason"].as_str(), Some("error" | "aborted"));
-        let done = !running || (res["exitCode"].as_i64().is_some_and(|e| e >= 0) && (!last.is_empty() || failed));
-        let u_ = &res["usage"];
-        let meta = (!u_.is_null()).then(|| format!("{}t · {} · {}", u_["turns"].as_u64().unwrap_or(0), tok(u_["input"].as_u64().unwrap_or(0) + u_["output"].as_u64().unwrap_or(0)), cost(u_["cost"].as_f64().unwrap_or(0.))));
-        let open = agent_file(res["sessionFile"].as_str(), res["hubId"].as_i64(), &task, cx).map(open_run);
+        let output = res["output"].as_str().unwrap_or("").to_string();
+        let failed = matches!(res["status"].as_str(), Some("failed" | "cancelled"));
+        let done = failed || res["status"] == "completed" || !matches!(tb.status, ToolStatus::Running | ToolStatus::Queued | ToolStatus::Streaming);
+        let meta = [res["model"].as_str().map(String::from), res["pid"].as_u64().filter(|_| !done).map(|p| format!("pid {p}"))].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+        let open = (!res.is_null()).then(|| crate::state::hub::AgentRun::of(&res, cx)).flatten().map(open_run);
         let key = format!("{}-ag{i}", tb.id);
         let dot: AnyElement = if done { div().text_size(em(cx, 0.9 * 0.7)).text_color(if failed { p.red } else { p.green }).child("●").into_any_element() }
             else { div().text_color(p.accent).child(super::frame::spin(SharedString::from(format!("{key}-sp")))).into_any_element() };
         let text = p.tertiary;
+        let doing = (!done).then(|| output.lines().rev().find(|l| !l.trim().is_empty()).map(String::from)).flatten();
         let head = div().id(SharedString::from(format!("{key}-h"))).flex().items_baseline().gap(u(8.)).min_w_0()
             .child(dot)
             .child(div().flex_none().text_color(p.tertiary).when(open.is_some(), |d| d.hover(move |s| s.text_color(text).underline())).child(agent))
             .child(div().flex_1().min_w_0().truncate().text_color(p.mid).child(one(&task, 100)))
-            .when_some(meta, |d, m| d.child(div().flex_none().text_color(p.dim).text_size(em(cx, 0.9 * 0.85)).whitespace_nowrap().child(m)))
+            .when(!meta.is_empty(), |d| d.child(div().flex_none().text_color(p.dim).text_size(em(cx, 0.9 * 0.85)).whitespace_nowrap().child(meta)))
             .when_some(open, |d, o| d.cursor_pointer().on_click(move |_, w, cx| { cx.stop_propagation(); o(w, cx) }));
         let out_key = format!("{key}-out");
         col = col.child(div().border(u(1.)).border_color(if failed { mix(p.red, 0.5, p.line) } else { p.line }).rounded(u(g.r2)).px(u(10.)).py(u(6.)).bg(p.surface_low)
             .child(head)
-            .when(!done && !doing.is_empty(), |d| d.child(div().mt(u(2.)).text_size(em(cx, 0.9 * 0.9)).text_color(p.mid).truncate().child(format!("› {doing}"))))
-            .when(failed, |d| d.when_some(res["errorMessage"].as_str(), |d, e| d.child(div().mt(u(2.)).text_size(em(cx, 0.9 * 0.9)).text_color(p.red).child(one(e, 300)))))
-            .when(!last.is_empty(), |d| d.child(details(out_key, "output", &last, cx))));
+            .when_some(doing, |d, s| d.child(div().mt(u(2.)).text_size(em(cx, 0.9 * 0.9)).text_color(p.mid).truncate().child(format!("› {}", one(&s, 120)))))
+            .when(failed, |d| d.when_some(res["error"].as_str(), |d, e| d.child(div().mt(u(2.)).text_size(em(cx, 0.9 * 0.9)).text_color(p.red).child(one(e, 300)))))
+            .when(done && !output.is_empty(), |d| d.child(details(out_key, "output", &output, cx))));
     }
     col.into_any_element()
 }

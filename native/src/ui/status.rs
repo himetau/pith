@@ -19,10 +19,9 @@ impl StatusLine {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let app = Pith::global(cx);
         let subs = vec![cx.observe(&app, |this, _, cx| { this.watch(cx); cx.notify(); })];
-        // pi --version is slow, so it never runs before the first frame
+        // pi --version is a process start, so it never runs before the first frame
         cx.spawn(async move |this, cx| {
-            let bin = crate::core::sys::setting_str("piPath");
-            let v = cx.background_spawn(async move { crate::core::sys::pi_version(if bin.is_empty() { "pi" } else { &bin }) }).await;
+            let v = cx.background_spawn(async move { crate::core::sys::pi_version(&crate::core::sys::pi_bin(&crate::core::sys::load_settings())) }).await;
             let _ = this.update(cx, |this, cx| { this.pi_version = v; cx.notify(); });
         }).detach();
         let mut s = StatusLine { app, branch: HashMap::new(), pi_version: String::new(), watched: None, _subs: subs };
@@ -88,7 +87,7 @@ impl Render for StatusLine {
                 .child(block(view, false, cx))
                 .child(seg(true, cx).text_color(p.dim).child(format!("{live} pi running{}", if busy > 0 { format!(" · {busy} working") } else { String::new() })))
                 .child(div().flex_1())
-                .child(seg(true, cx).text_color(p.dim).child(format!("pi {}", self.pi_version.trim_start_matches("pi").trim())));
+                .child(seg(true, cx).text_color(p.dim).child(format!("pi {}", self.pi_version)));
         };
         let tab = t.read(cx);
         if !self.branch.contains_key(&tab.cwd) { self.branch.insert(tab.cwd.clone(), String::new()); let c = tab.cwd.clone(); self.load_branch(c, cx); }
@@ -114,7 +113,6 @@ impl Render for StatusLine {
         let (tin, tout, cost) = (tok("input") + tok("cacheRead"), tok("output"), st["cost"].as_f64().unwrap_or(0.));
         let window_ctx = cu["contextWindow"].as_f64().unwrap_or(0.);
         let ctx_known = !cu["tokens"].is_null();
-        let statuses: Vec<String> = tab.statuses.iter().map(|(_, v)| v.clone()).collect();
         let cwd = super::tools::tilde(&tab.cwd);
         let full = tab.cwd.clone();
         let ctx_tip = format!("context {} / {}", if ctx_known { super::page::tokens(cu["tokens"].as_f64().unwrap_or(0.)) } else { "?".into() }, super::page::tokens(window_ctx));
@@ -127,7 +125,6 @@ impl Render for StatusLine {
             .child(block(word, running, cx))
             .child(seg(true, cx).id("st-cwd").tip(full, cx).child(cwd))
             .when(!br.is_empty(), |d| d.child(seg(false, cx).text_color(p.dim).child(format!("⎇ {br}"))))
-            .children(statuses.into_iter().map(|s| seg(false, cx).text_color(p.tertiary).child(s)))
             .child(div().flex_1())
             .child(seg(true, cx).id("st-mode").cursor_pointer().text_color(mode_color(mode, cx)).hover(|s| s.text_color(pal(cx).text)).tip(mode_tip, cx).child(mode.as_str())
                 .on_click(move |_, window, cx| super::picker::modes(t1.clone(), window, cx)))

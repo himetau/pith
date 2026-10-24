@@ -13,7 +13,7 @@ impl Cmd {
     fn app(name: &str, desc: &str, arg: Option<&str>) -> Self { Cmd { name: name.into(), desc: desc.into(), arg: arg.map(String::from), source: "app".into() } }
     // what the menu shows next to the name: nothing for pith's own, otherwise where it comes from
     pub fn tag(&self) -> Option<&'static str> {
-        match self.source.as_str() { "app" => None, "prompt" => Some("template"), "skill" => Some("skill"), "extension" => Some("extension"), _ => None }
+        match self.source.as_str() { "template" => Some("template"), "skill" => Some("skill"), _ => None }
     }
 }
 

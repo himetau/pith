@@ -1,5 +1,5 @@
-// Subagents running right now, live off the hub (state/hub.rs). finished ones drop off; failures stay for 15 minutes
-// so you notice them, or until dismissed. a card opens the run as a watched tab
+// Subagents running right now, across open sessions (state/hub.rs). finished ones drop off; failures stay for 15
+// minutes so you notice them, or until dismissed. a card opens the run's transcript as a watched tab
 use super::{btn_sm, empty, pbar};
 use crate::core::sys;
 use crate::state::app::{Pith, View};
@@ -18,7 +18,7 @@ use std::time::Duration;
 
 const FAILED_FOR: f64 = 15. * 60_000.;
 
-fn key(a: &Value) -> String { format!("{}:{}", a["id"], a["startedAt"]) }
+fn key(a: &Value) -> String { a["key"].as_str().unwrap_or("").to_string() }
 // dismissals outlive a restart, like the reference's localStorage
 fn dismissed_file() -> std::path::PathBuf { sys::data_dir().join("agents-dismissed.json") }
 
@@ -36,7 +36,7 @@ impl Agents {
         // elapsed times tick while something runs; failures age out on their own, not only when the hub changes
         let tick = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(1)).await;
-            if this.update(cx, |_, cx| if Hub::global(cx).read(cx).running_count() > 0 { cx.notify(); }).is_err() { break; }
+            if this.update(cx, |_, cx| if Hub::running_count(cx) > 0 { cx.notify(); }).is_err() { break; }
         });
         let age = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(Duration::from_secs(60)).await;
@@ -48,18 +48,15 @@ impl Agents {
 
     fn shown(&self, cx: &App) -> Vec<Value> {
         let now = now_ms();
-        let mut v: Vec<Value> = Hub::global(cx).read(cx).agents().into_iter().filter(|a| running(a) || (
-            matches!(a["status"].as_str(), Some("failed" | "aborted")) && a["errorMessage"] != "Killed by user"
-            && now - a["endedAt"].as_f64().filter(|e| *e > 0.).or(a["startedAt"].as_f64()).unwrap_or(0.) < FAILED_FOR && !self.dismissed.contains(&key(a))
-        )).collect();
-        v.sort_by(|a, b| b["startedAt"].as_f64().unwrap_or(0.).partial_cmp(&a["startedAt"].as_f64().unwrap_or(0.)).unwrap_or(std::cmp::Ordering::Equal));
-        v
+        Hub::agents(cx).into_iter().filter(|a| running(a) || (
+            a["status"] == "failed" && a["endedAt"].as_f64().is_some_and(|e| now - e < FAILED_FOR) && !self.dismissed.contains(&key(a))
+        )).collect()
     }
 
     // the dismissed list only keeps runs the hub still knows about
     fn dismiss(&mut self, k: String, cx: &mut Context<Self>) {
         self.dismissed.insert(k);
-        let live: HashSet<String> = Hub::global(cx).read(cx).agents().iter().map(key).collect();
+        let live: HashSet<String> = Hub::agents(cx).iter().map(key).collect();
         self.dismissed.retain(|k| live.contains(k));
         let list: Vec<&String> = self.dismissed.iter().collect();
         let _ = std::fs::create_dir_all(sys::data_dir());
@@ -73,18 +70,18 @@ impl Agents {
         let k = key(a);
         let open = self.open.contains(&k);
         let status = a["status"].as_str().unwrap_or("");
-        let retries = a["retries"].as_u64().unwrap_or(0);
-        let status = if status == "spawning" && retries > 0 { "continuing" } else { status };
         let started = a["startedAt"].as_f64().unwrap_or(0.);
-        let when = if run { dur(now_ms() - started) } else { ago(a["endedAt"].as_f64().filter(|e| *e > 0.).unwrap_or(started)) };
-        let u_ = &a["usage"];
-        let toks = u_["input"].as_f64().unwrap_or(0.) + u_["output"].as_f64().unwrap_or(0.);
-        let mut meta = format!("{} turns · {} tok · {}", u_["turns"].as_u64().unwrap_or(0), tokens(toks), cost(u_["cost"].as_f64().unwrap_or(0.)));
-        if let Some(m) = a["model"].as_str().filter(|m| !m.is_empty()) { meta.push_str(&format!(" · {m}")); }
-        if let Some(pid) = a["pid"].as_u64().filter(|p| *p > 0) { meta.push_str(&format!(" · pid {pid}")); }
-        let run_of = AgentRun::of(a);
+        let when = if run { dur(now_ms() - started) } else { ago(a["endedAt"].as_f64().unwrap_or(started)) };
+        let mut meta = vec![];
+        if let Some(m) = a["model"].as_str().filter(|m| !m.is_empty()) { meta.push(m.to_string()); }
+        if let Some(pid) = a["pid"].as_u64().filter(|p| *p > 0) { meta.push(format!("pid {pid}")); }
+        let meta = meta.join(" · ");
+        let run_of = AgentRun::of(a, cx);
         let (k1, k2) = (k.clone(), k.clone());
-        let activity = a["currentActivity"].as_str().filter(|s| !s.is_empty()).map(String::from);
+        // what it's saying right now: the last line of its output so far, or why it failed
+        let output = a["output"].as_str().unwrap_or("").to_string();
+        let activity = a["error"].as_str().filter(|e| !e.is_empty()).map(String::from)
+            .or_else(|| output.lines().rev().find(|l| !l.trim().is_empty()).map(String::from));
         let fs = g.fs * 0.9;
         let (text, hover, mid) = (p.text, p.hover, p.mid);
         let mini = move |id: SharedString, icon: IconName| div().id(id).px(u(2.)).rounded(u(4.)).flex().items_center().self_center().text_color(mid).cursor_pointer()
@@ -96,18 +93,16 @@ impl Agents {
                 else { div().text_color(p.red).text_size(u(fs * 0.7)).child("●").into_any_element() })
             .child(div().text_color(p.tertiary).child(a["agent"].as_str().unwrap_or("agent").to_string()))
             .child(div().text_color(p.dim).text_size(u(fs * 0.85)).child(status.to_string()))
-            .when(retries > 0, |d| d.child(div().id(SharedString::from(format!("ag-r-{k}"))).text_size(u(fs * 0.75)).text_color(p.dim).border(u(1.)).border_color(p.line).rounded(u(3.)).px(u(4.))
-                .tooltip(|w, cx| Tooltip::new("auto-continued after it failed").build(w, cx)).child(format!("↻ {retries}"))))
             .child(div().flex_1())
             .child(div().text_color(p.dim).child(when))
             .child(mini(SharedString::from(format!("ag-more-{k}")), if open { IconName::ChevronDown } else { IconName::ChevronRight })
-                .tooltip(move |w, cx| Tooltip::new(if open { "less" } else { "timeline" }).build(w, cx))
+                .tooltip(move |w, cx| Tooltip::new(if open { "less" } else { "output" }).build(w, cx))
                 .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); if !this.open.remove(&k1) { this.open.insert(k1.clone()); } cx.notify(); })))
             .when(!run, |d| d.child(mini(SharedString::from(format!("ag-x-{k}")), IconName::X).tooltip(|w, cx| Tooltip::new("dismiss").build(w, cx))
                 .on_click(cx.listener(move |this, _, _, cx| { cx.stop_propagation(); this.dismiss(k2.clone(), cx); }))))
             .on_click(cx.listener(move |this, _, _, cx| match &run_of {
                 Some(r) => { let r = r.clone(); Pith::global(cx).update(cx, |a, cx| { a.open_agent(r, cx); }); }
-                // no session to open: the timeline is all there is
+                // no transcript to open: its output is all there is
                 None => { if !this.open.remove(&k) { this.open.insert(k.clone()); } cx.notify(); }
             }));
 
@@ -117,18 +112,9 @@ impl Agents {
             .child(div().my(u(2.)).text_color(p.mid).line_clamp(2).child(a["task"].as_str().unwrap_or("").to_string()))
             .when_some(activity, |d, s| d.child(div().mt(u(2.)).text_size(u(fs * 0.9)).text_color(p.mid).overflow_hidden().text_ellipsis().whitespace_nowrap()
                 .child(format!("› {s}"))))
-            .child(div().text_size(u(fs * 0.82)).text_color(p.dim).child(meta))
-            .when(open, |d| {
-                let evs: Vec<Value> = a["timeline"].as_array().map(|t| t.iter().rev().take(30).rev().cloned().collect()).unwrap_or_default();
-                let out = a["finalOutput"].as_str().filter(|s| !s.is_empty()).map(String::from)
-                    .or_else(|| a["textStream"].as_str().filter(|s| !s.is_empty()).map(|s| { let n = s.len().saturating_sub(3000); s[s.ceil_char_boundary(n)..].to_string() }));
-                d.child(v_flex().mt(u(6.)).gap(u(1.)).text_size(u(fs * 0.86))
-                    .children(evs.iter().map(|e| h_flex().min_w_0().whitespace_nowrap().text_color(if e["type"] == "error" { p.red } else { p.mid })
-                        .child(div().flex_none().text_color(p.dim).child(format!("{}\u{a0}", clock(e["timestamp"].as_f64().unwrap_or(0.)))))
-                        .child(div().min_w_0().overflow_hidden().text_ellipsis().child(e["summary"].as_str().unwrap_or("").to_string()))))
-                    .when_some(out, |d, o| d.child(div().id(SharedString::from(format!("ag-o-{}", key(a)))).mt(u(6.)).max_h(u(380.)).overflow_y_scroll()
-                        .text_size(u(fs * 0.86 * 0.92)).text_color(p.mid).child(o))))
-            })
+            .when(!meta.is_empty(), |d| d.child(div().text_size(u(fs * 0.82)).text_color(p.dim).child(meta)))
+            .when(open && !output.is_empty(), |d| d.child(div().id(SharedString::from(format!("ag-o-{}", key(a)))).mt(u(6.)).max_h(u(380.)).overflow_y_scroll()
+                .text_size(u(fs * 0.86 * 0.92)).text_color(p.mid).child(output.clone())))
             .into_any_element()
     }
 }
@@ -139,7 +125,7 @@ impl Render for Agents {
         let bar = pbar(cx).child(div().h(u(26.)).flex().items_center().child("subagents")).child(div().flex_1())
             .child(btn_sm("ag-library", true, false, cx).child("library").on_click(|_, _, cx| Pith::global(cx).update(cx, |a, cx| a.show(View::Agents, cx))));
         let body: AnyElement = if shown.is_empty() {
-            empty(Some("nothing running"), "when pi uses the subagent tool, or /summon, they show up here live. finished ones drop off, failures stay a while", cx).into_any_element()
+            empty(Some("nothing running"), "when pi uses the subagent tool, or you summon one from the library, they show up here live. finished ones drop off, failures stay a while", cx).into_any_element()
         } else {
             let cards: Vec<AnyElement> = shown.iter().map(|a| self.card(a, cx)).collect();
             div().id("ag-list").flex_1().min_h_0().overflow_y_scroll().child(v_flex().p(u(8.)).gap(u(6.)).children(cards)).into_any_element()
@@ -163,21 +149,4 @@ fn dur(ms: f64) -> String {
 fn ago(ts: f64) -> String {
     let s = ((now_ms() - ts) / 1000.).max(0.);
     if s < 45. { "now".into() } else if s < 3600. { format!("{}m", (s / 60.).round()) } else if s < 86400. { format!("{}h", (s / 3600.).round()) } else { format!("{}d", (s / 86400.).round()) }
-}
-
-// fmt.ts tokens and cost
-fn tokens(n: f64) -> String {
-    if n <= 0. { "0".into() } else if n < 1000. { format!("{n}") } else if n < 10_000. { format!("{:.1}k", n / 1000.) } else if n < 1e6 { format!("{}k", (n / 1000.).round()) }
-    else if n < 1e7 { format!("{:.2}M", n / 1e6) } else { format!("{:.1}M", n / 1e6) }
-}
-fn cost(n: f64) -> String {
-    if n <= 0. { "$0".into() } else if n < 0.01 { format!("${n:.4}") } else if n < 10. { format!("${n:.2}") } else if n < 1000. { format!("${n:.1}") } else { format!("${}", n.round()) }
-}
-
-// hh:mm:ss in local time, from an epoch-ms timestamp
-fn clock(ms: f64) -> String {
-    let secs = (ms / 1000.) as libc::time_t;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&secs, &mut tm) };
-    format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
 }

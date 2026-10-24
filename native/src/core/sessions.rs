@@ -186,3 +186,25 @@ pub fn usage_report() -> Value {
     }
     serde_json::json!({ "spend": spend, "sessions": sessions })
 }
+
+// a copy of a session under a new id, next to it, with the old one as its parent. hands back the new path
+pub fn clone_file(file: &str) -> Result<String, String> {
+    use rand::Rng;
+    let text = fs::read_to_string(file).map_err(|e| e.to_string())?;
+    let b: [u8; 16] = rand::rng().random();
+    let id = format!("{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}", u32::from_be_bytes([b[0], b[1], b[2], b[3]]), u16::from_be_bytes([b[4], b[5]]), u16::from_be_bytes([b[6], b[7]]) & 0xfff,
+        (u16::from_be_bytes([b[8], b[9]]) & 0x3fff) | 0x8000, u64::from_be_bytes([0, 0, b[10], b[11], b[12], b[13], b[14], b[15]]));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let stamp = super::imagegen::iso_ms(now);
+    let mut lines = text.lines();
+    let mut head: Value = lines.next().and_then(|l| serde_json::from_str(l).ok()).ok_or("not a session file")?;
+    head["id"] = Value::from(id.clone());
+    head["timestamp"] = Value::from(stamp.clone());
+    head["parentSession"] = Value::from(file);
+    let dir = PathBuf::from(file).parent().map(PathBuf::from).ok_or("no folder")?;
+    let out = dir.join(format!("{}_{}.jsonl", stamp.replace(':', "-"), &id[..8]));
+    let mut f = fs::File::create(&out).map_err(|e| e.to_string())?;
+    writeln!(f, "{head}").map_err(|e| e.to_string())?;
+    for l in lines { writeln!(f, "{l}").map_err(|e| e.to_string())?; }
+    Ok(out.display().to_string())
+}

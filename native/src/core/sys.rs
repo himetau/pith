@@ -1,5 +1,5 @@
 // Everything read off the machine that isn't a pi session: settings, matugen colours, kitty's font,
-// hyprland's gaps, git, files, agent definitions, the subagent hub, the image library
+// hyprland's gaps, git, files, agent definitions, subagent transcripts, the image library
 use base64::Engine;
 use serde_json::{json, Map, Value};
 use std::fs;
@@ -23,7 +23,7 @@ pub fn agent_dir() -> PathBuf {
 fn defaults() -> Value {
     let h = home();
     json!({
-        "piPath": "pi", "extraArgs": "", "defaultCwd": h, "mode": "ask", "font": "", "proseFont": "", "fontSize": 14,
+        "piPath": "", "extraArgs": "", "defaultCwd": h, "mode": "ask", "font": "", "proseFont": "", "fontSize": 14,
         "notify": true, "budget": { "window5h": 0, "week": 0, "month": 0 },
         "imageModel": "gemini-3.1-flash-image", "imageCost": 0, "imageProvider": "my-endpoint",
         "browserHome": "https://duckduckgo.com", "designDir": h.join("Designs"), "pinned": [], "maxLive": 6,
@@ -52,7 +52,6 @@ pub fn save_settings(patch: Value) -> Value {
     let _ = fs::write(settings_file(), serde_json::to_string_pretty(&cur).unwrap() + "\n");
     cur
 }
-pub fn setting_str(key: &str) -> String { load_settings().get(key).and_then(|v| v.as_str()).unwrap_or("").to_string() }
 
 
 // kitty writes "Maple Mono medium", the weight word isn't part of the family
@@ -73,10 +72,20 @@ pub fn terminal_font() -> Value {
 }
 
 
+// the pi every session runs: piPath when it's set, else the one pith ships with (beside it, or fetched into
+// native/target/pi by scripts/fetch-pi.sh for a dev build), else whatever pi is on PATH
+pub fn pi_bin(settings: &Value) -> String {
+    if let Some(p) = settings["piPath"].as_str().filter(|p| !p.is_empty() && *p != "pi") { return p.to_string(); }
+    let res = crate::state::app::res();
+    [res.join("pi"), res.join("native/target/pi/pi")].into_iter().find(|p| p.is_file())
+        .map(|p| p.display().to_string()).unwrap_or_else(|| "pi".into())
+}
+
+// "pi 0.8.0 (<build>)" -> "0.8.0"
 pub fn pi_version(bin: &str) -> String {
     Command::new(bin).arg("--version").output().ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .filter(|s| !s.is_empty()).unwrap_or_else(|| "not found".into())
+        .and_then(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().nth(1).map(String::from))
+        .unwrap_or_else(|| "not found".into())
 }
 
 // ---------- git and files ----------
@@ -204,29 +213,19 @@ pub fn save_agent(def: &Value, cwd: Option<&str>, scope: &str) -> String {
     file.display().to_string()
 }
 
-fn alive(pid: i64) -> bool {
-    // signal 0 only checks; EPERM still means it exists
-    (unsafe { libc::kill(pid as i32, 0) == 0 }) || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+
+// a subagent's transcript: <agent dir>/agent-hub/<pi pid>[-<id>]/<agent>-<n>.transcript.jsonl
+pub fn subagent_transcript(pi_pid: u64, agent: &str, n: usize) -> Option<String> {
+    let name = format!("{agent}-{n}.transcript.jsonl");
+    let (dir, pre) = (pi_pid.to_string(), format!("{pi_pid}-"));
+    fs::read_dir(agent_dir().join("agent-hub")).ok()?.flatten()
+        .filter(|d| { let f = d.file_name().to_string_lossy().into_owned(); f == dir || f.starts_with(&pre) })
+        .map(|d| d.path().join(&name)).find(|p| p.is_file())
+        .map(|p| p.display().to_string())
 }
 
-// the extension can die mid-run and leave agents marked running forever, so check their pid
-pub fn read_agent_hub() -> Value {
-    let Ok(text) = fs::read_to_string(agent_dir().join("runtime/agents-state.json")) else { return Value::Null };
-    let Ok(mut hub) = serde_json::from_str::<Value>(&text) else { return Value::Null };
-    if let Some(agents) = hub.get_mut("agents").and_then(|a| a.as_array_mut()) {
-        for a in agents {
-            let running = matches!(a.get("status").and_then(|s| s.as_str()), Some("spawning" | "thinking" | "tool" | "streaming"));
-            let pid = a.get("pid").and_then(|p| p.as_i64()).unwrap_or(0);
-            // no pid while spawning is normal, and it's how auto-continue waits between attempts
-            let spawning = a.get("status").and_then(|s| s.as_str()) == Some("spawning");
-            if running && if pid == 0 { !spawning } else { !alive(pid) } { a["status"] = json!("aborted"); }
-        }
-    }
-    hub
-}
-
-// a subagent's session straight off disk, shaped like pi's get_entries, since its own process owns it while it runs
-pub fn agent_session(file: &str) -> Value {
+// a session straight off disk: every entry and the leaf, the last one written
+pub fn session_entries(file: &str) -> Value {
     let bytes = fs::read(file).unwrap_or_default();
     let entries: Vec<Value> = String::from_utf8_lossy(&bytes).lines()
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())

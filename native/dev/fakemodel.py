@@ -10,6 +10,9 @@
 #   contains "read"  -> a read of notes.txt
 #   contains "write" -> a write of hello.py
 #   contains "ponder" -> a long stretch of reasoning streamed slowly, then a short reply
+#   contains "todo"  -> pi's todo tool starts a task list
+#   contains "question" -> pi's ask tool asks which of two options
+#   contains "delegate" -> pi's subagent tool sends a scout to look around (the child is answered by this model too)
 #   anything else    -> reasoning, then a short markdown reply
 import json, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,8 +41,11 @@ That's it — `cargo build` and run it again.
 
 SCRIPTED = [
     ("slow", "bash", {"command": "for i in $(seq 1 12); do echo \"step $i of 12\"; sleep 0.5; done"}),
-    ("edit", "edit", {"path": "notes.txt", "edits": [{"oldText": "hello", "newText": "hello\nworld, from the fake model"}]}),
+    ("edit", "edit", {"path": "notes.txt", "oldText": "hello", "newText": "hello\nworld, from the fake model"}),
     ("read", "read", {"path": "notes.txt"}),
+    ("delegate", "subagent", {"agent": "scout", "task": "look around the repo and say what is there"}),
+    ("todo", "todo", {"op": "init", "tasks": ["read the code", "fix the bug", "run the tests"]}),
+    ("question", "ask", {"questions": [{"question": "Which way should I go?", "options": [{"label": "Rewrite it", "description": "start clean"}, {"label": "Patch it"}]}]}),
     ("write", "write", {"path": "hello.py", "content": "import sys\n\n\ndef main():\n    # say hello to whoever is there\n    print(f\"hello {sys.argv[1:] or 'world'}\")\n\n\nif __name__ == \"__main__\":\n    main()\n"}),
 ]
 

@@ -1,8 +1,8 @@
-// Loopback http server for ext/pith-bridge.ts, which runs inside each pi process. Random port,
-// random token, both handed to pi through the environment
+// Loopback http server for ext/pith.js, which runs inside each pi process. Random port and a random token in the
+// path, handed to pi as one url (PITH_BRIDGE): pi keeps env vars that look like secrets away from extensions
 use serde_json::{json, Value};
 
-pub fn start(handle: impl Fn(String, String, Value) -> Result<Value, String> + Send + Sync + 'static) -> (String, String) {
+pub fn start(handle: impl Fn(String, String, Value) -> Result<Value, String> + Send + Sync + 'static) -> String {
     use rand::Rng;
     let token: String = rand::rng().sample_iter(rand::distr::Alphanumeric).take(48).map(char::from).collect();
     let server = tiny_http::Server::http("127.0.0.1:0").expect("bridge couldn't bind");
@@ -16,9 +16,7 @@ pub fn start(handle: impl Fn(String, String, Value) -> Result<Value, String> + S
             std::thread::spawn(move || {
                 let reply = |code: u16, body: Value| tiny_http::Response::from_string(body.to_string()).with_status_code(code)
                     .with_header("content-type: application/json".parse::<tiny_http::Header>().unwrap());
-                let authed = req.headers().iter().any(|h| h.field.equiv("x-pith-token") && h.value.as_str() == tok);
-                if req.method() != &tiny_http::Method::Post || req.url() != "/call" { let _ = req.respond(reply(404, json!({ "error": "nope" }))); return; }
-                if !authed { let _ = req.respond(reply(403, json!({ "error": "bad token" }))); return; }
+                if req.method() != &tiny_http::Method::Post || req.url() != format!("/{tok}/call") { let _ = req.respond(reply(404, json!({ "error": "nope" }))); return; }
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
                 let Ok(v) = serde_json::from_str::<Value>(&body) else { let _ = req.respond(reply(400, json!({ "error": "bad json" }))); return; };
@@ -32,5 +30,5 @@ pub fn start(handle: impl Fn(String, String, Value) -> Result<Value, String> + S
             });
         }
     });
-    (format!("http://127.0.0.1:{port}"), token)
+    format!("http://127.0.0.1:{port}/{token}")
 }

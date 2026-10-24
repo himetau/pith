@@ -72,10 +72,9 @@ impl SettingsPage {
         page
     }
 
-    // `pi --version` takes a few hundred ms, so it runs on a worker
+    // `pi --version` runs on a worker, it's a process start
     fn check_pi(&mut self, cx: &mut Context<Self>) {
-        let bin = sys::setting_str("piPath");
-        let bin = if bin.is_empty() { "pi".to_string() } else { bin };
+        let bin = sys::pi_bin(&sys::load_settings());
         cx.spawn(async move |this, cx| {
             let v = cx.background_spawn(async move { sys::pi_version(&bin) }).await;
             let _ = this.update(cx, |this, cx| { this.pi_version = v; cx.notify(); });
@@ -95,7 +94,7 @@ impl SettingsPage {
         let val = match kind(key) {
             Kind::Num(lo, hi) => json!((num().unwrap_or(lo).clamp(lo, hi)).round() as i64),
             Kind::Money => json!(num().unwrap_or(0.).max(0.)),
-            Kind::Text | Kind::Dir => json!(if key == "piPath" && raw.is_empty() { "pi".to_string() } else { raw }),
+            Kind::Text | Kind::Dir => json!(raw),
         };
         // what the field shows is what got saved, so a clamp or a bad number is visible straight away
         let shown = show(&val);
@@ -200,7 +199,7 @@ impl Render for SettingsPage {
         let f = |this: &Self, label: &str, hint: &str, first: bool, key: &'static str, window: &Window, cx: &mut Context<Self>| { let c = this.control(key, window, cx); field(label, hint, first, c, cx) };
 
         let pi = group("pi", vec![
-            f(self, "pi binary", "what pith runs for every session", true, "piPath", window, cx),
+            f(self, "pi binary", "empty runs the pi_agent_rust that ships with pith", true, "piPath", window, cx),
             field("version", "", false, mono(self.pi_version.clone()), cx),
             f(self, "extra arguments", "added to every pi it starts, like --no-skills", false, "extraArgs", window, cx),
             f(self, "open sessions", "idle sessions past this give their process back until you open them again", false, "maxLive", window, cx),

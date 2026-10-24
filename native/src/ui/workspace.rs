@@ -560,8 +560,9 @@ impl Workspace {
         if !(self.focus.is_focused(window) || window.focused(cx).is_none()) { return; }
         let Some((_, c)) = self.chat(cx) else { return };
         ChatView::focus_composer(&c, window, cx);
-        let ks = k.clone();
-        window.defer(cx, move |window, cx| { window.dispatch_keystroke(ks, cx); });
+        // appended rather than re-dispatched: a replayed key lands before the cursor the input restores on focus
+        let (composer, ch) = (c.read(cx).composer.clone(), ch.clone());
+        composer.update(cx, |c, cx| c.append(&ch, window, cx));
         cx.stop_propagation();
     }
 }

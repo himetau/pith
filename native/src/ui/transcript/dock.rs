@@ -1,5 +1,5 @@
 // What sits under the transcript (chat.ts .dock): the live line, the todo strip, messages waiting their turn, extension
-// widgets, pi's questions and the composer, with any widgets an extension put below it
+// pi's questions and the composer
 use crate::state::tab::{Status, Tab};
 use crate::ui::asks::Asks;
 use crate::ui::composer::Composer;
@@ -40,16 +40,13 @@ impl Render for Dock {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let weak = cx.weak_entity();
         let todos = todo_strip(&self.tab, self.todos_open, move |_, _, cx| { let _ = weak.update(cx, |d, cx| { d.todos_open = !d.todos_open; cx.notify(); }); }, cx);
-        let (above, below) = widgets(&self.tab, cx);
         h_flex().w_full().justify_center().child(
             // the live line itself is the transcript's last row (chat.rs live_line), as in the webview
             v_flex().w_full().max_w(u(DOCK_W)).px(u(28.)).pt(u(4.)).pb(u(14.))
                 .children(todos)
                 .children(queue(&self.tab, cx))
-                .children(above)
                 .child(self.asks.clone())
-                .child(self.composer.clone())
-                .children(below),
+                .child(self.composer.clone()),
         )
     }
 }
@@ -182,40 +179,27 @@ pub fn todo_strip(tab: &Entity<Tab>, open: bool, on_toggle: impl Fn(&ClickEvent,
         .into_any_element())
 }
 
-// ---------- queued messages (.queue .qchip): each can be taken back into the composer ----------
+// ---------- queued messages (.queue .qchip): steers are pi's already, follow-ups can be taken back ----------
 pub fn queue(tab: &Entity<Tab>, cx: &App) -> Option<AnyElement> {
     let (p, g) = (pal(cx), geo(cx));
     let (steer, follow) = tab.read(cx).queue.clone();
     if steer.is_empty() && follow.is_empty() { return None; }
-    let rows = steer.into_iter().map(|s| ("next", s)).chain(follow.into_iter().map(|s| ("after", s)));
+    let rows = steer.into_iter().map(|s| ("next", s, false)).chain(follow.into_iter().map(|s| ("after", s, true)));
     let fs = g.fs * 0.88;
     let mut col = v_flex().gap(u(4.)).mb(u(8.));
-    for (i, (k, text)) in rows.enumerate() {
+    for (i, (k, text, mine)) in rows.enumerate() {
         let (t, back) = (tab.clone(), text.clone());
         let (hover, tx) = (p.hover, p.text);
         col = col.child(
             h_flex().items_center().gap(u(8.)).min_w_0().py(u(3.)).pr(u(4.)).pl(u(10.)).rounded(u(g.r2)).bg(p.raised).text_size(u(fs))
                 .child(div().flex_none().text_size(u(fs * 0.85)).text_color(p.accent).child(k))
                 .child(div().flex_1().min_w_0().truncate().text_color(p.mid).child(text.replace('\n', " ")))
-                .child(div().id(("unqueue", i)).flex_none().size(u(22.)).rounded(u(4.)).flex().items_center().justify_center().cursor_pointer().text_color(p.dim)
+                .when(mine, |d| d.child(div().id(("unqueue", i)).flex_none().size(u(22.)).rounded(u(4.)).flex().items_center().justify_center().cursor_pointer().text_color(p.dim)
                     .hover(move |s| s.text_color(tx).bg(hover))
                     .child(Icon::new(IconName::X).size(u(fs * 1.2)))
                     .tooltip(|w, cx| Tooltip::new("take it back").build(w, cx))
-                    .on_click(move |_, _, cx| t.update(cx, |t, cx| t.unqueue(back.clone(), cx)))),
+                    .on_click(move |_, _, cx| t.update(cx, |t, cx| t.unqueue(back.clone(), cx))))),
         );
     }
     Some(col.into_any_element())
-}
-
-// ---------- extension widgets (.widget), over the composer and under it ----------
-pub fn widgets(tab: &Entity<Tab>, cx: &App) -> (Vec<AnyElement>, Vec<AnyElement>) {
-    let (p, g) = (pal(cx), geo(cx));
-    let t = tab.read(cx);
-    let (mut above, mut below) = (vec![], vec![]);
-    for (key, lines) in &t.widgets {
-        let el = div().w_full().mb(u(8.)).py(u(6.)).px(u(10.)).rounded(u(g.r2)).bg(p.surface_low).text_color(p.mid).text_size(u(g.fs * 0.85))
-            .child(lines.join("\n")).into_any_element();
-        if t.widgets_below.contains(key) { below.push(el) } else { above.push(el) }
-    }
-    (above, below)
 }

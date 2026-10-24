@@ -142,11 +142,11 @@ impl ImagesPage {
         cx.notify();
         let s = sys::load_settings();
         let str_of = |k: &str| s[k].as_str().unwrap_or("").to_string();
-        let (model, provider, pi, price) = (str_of("imageModel"), str_of("imageProvider"), s["piPath"].as_str().filter(|p| !p.is_empty()).unwrap_or("pi").to_string(), s["imageCost"].as_f64().unwrap_or(0.));
+        let (model, provider, price) = (str_of("imageModel"), str_of("imageProvider"), s["imageCost"].as_f64().unwrap_or(0.));
         let prompt = text.clone();
         cx.spawn_in(window, async move |this, cx| {
             let res = cx.background_spawn(async move {
-                let out = imagegen::generate(&prompt, &refs, &model, &provider, &sys::images_dir(), &pi)?;
+                let out = imagegen::generate(&prompt, &refs, &model, &provider, &sys::images_dir(), None)?;
                 // not part of any pi session, so it goes in pith's own log for the usage page
                 sessions::log_spend(&format!("{provider}/{model}"), out.input, out.output, price * out.files.len() as f64);
                 Ok::<_, String>(out.files.len())

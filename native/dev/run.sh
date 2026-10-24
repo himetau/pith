@@ -29,6 +29,8 @@ if ! { [ -f "$ST/sway.pid" ] && kill -0 "$(cat "$ST/sway.pid")" 2>/dev/null; }; 
   echo $! > "$ST/sway.pid"
   for _ in $(seq 1 50); do ls "$RT"/wayland-* >/dev/null 2>&1 && break; sleep 0.1; done
 fi
+# the pi pith ships with, fetched once into target/pi (scripts/fetch-pi.sh)
+"$HERE/../scripts/fetch-pi.sh" "$HERE/target/pi" >/dev/null || exit 1
 PORT=${FAKE_PORT:-18734}
 if ! curl -s -m 1 http://127.0.0.1:$PORT/v1/models >/dev/null; then
   setsid python3 -I "$HERE/dev/fakemodel.py" $PORT > /tmp/pith-native-fakemodel-$PORT.log 2>&1 &
@@ -41,6 +43,9 @@ cat > "$ST/agent/models.json" <<EOF
 EOF
 echo '{ "defaultProvider": "fake", "defaultModel": "fake-1", "lastChangelogVersion": "1.3.0" }' > "$ST/agent/settings.json"
 [ -f "$ST/xdg/config/pith/settings.json" ] || echo "{ \"defaultCwd\": \"$ST/work\", \"mode\": \"auto\", \"notify\": false }" > "$ST/xdg/config/pith/settings.json"
+# an agent for the subagent tool ("delegate" in a prompt)
+mkdir -p "$ST/agent/agents"
+printf -- '---\nname: scout\ndescription: looks around a codebase and reports\ntools: read, ls, grep, find\n---\nYou scout a codebase and report briefly.\n' > "$ST/agent/agents/scout.md"
 [ -f "$ST/work/notes.txt" ] || { echo "hello" > "$ST/work/notes.txt"; git -C "$ST/work" init -q 2>/dev/null; }
 
 stop_app

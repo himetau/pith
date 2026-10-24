@@ -104,6 +104,17 @@ impl Composer {
 
     pub fn focus_handle(&self, cx: &App) -> FocusHandle { self.input.read(cx).focus_handle(cx) }
 
+    // text onto the end, the cursor after it. like typing it, so a / still opens the menu
+    pub fn append(&mut self, more: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let text = format!("{}{more}", self.input.read(cx).value());
+        self.input.update(cx, |s, cx| {
+            s.set_value(text.clone(), window, cx);
+            s.set_selected_range(text.len()..text.len(), cx);
+        });
+        self.update_menu(cx);
+        cx.notify();
+    }
+
     pub fn set_text(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.input.update(cx, |s, cx| {
             s.set_value(text.to_string(), window, cx);

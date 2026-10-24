@@ -125,7 +125,7 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
         let used = c.update(cx, |c, cx| c.paste(&item, window, cx));
         return json!({ "ok": true, "used": used });
     } else if cmd["event"].is_object() {
-        // as if pi had sent it to the open session, e.g. an extension_ui_request
+        // as if pi had sent it to the open session, e.g. an ask_request
         let Some(t) = app.read(cx).active.clone() else { return json!({ "ok": false, "error": "no session" }) };
         t.update(cx, |t, cx| t.on_event(&cmd["event"], cx));
     } else if let Some(p) = cmd["lightbox"].as_str() {
@@ -156,11 +156,14 @@ fn run(cmd: &Value, window: &mut Window, cx: &mut App) -> Value {
             let items: Vec<Value> = t.items.iter().map(|i| match &i.kind {
                 ItemKind::User { text, .. } => json!({ "k": "user", "text": text }),
                 ItemKind::Assistant(x) => json!({ "k": "assistant", "blocks": x.blocks.len(), "live": x.live, "error": x.error }),
-                ItemKind::Bash { command, .. } => json!({ "k": "bash", "command": command }),
+                ItemKind::Bash { command, output, exit, running, .. } => json!({ "k": "bash", "command": command, "output": output, "exit": exit, "running": running }),
                 ItemKind::Note { text, .. } => json!({ "k": "note", "text": text }),
                 other => json!({ "k": format!("{:?}", std::mem::discriminant(other)) }),
             }).collect();
-            json!({ "id": t.id, "title": t.title(), "status": format!("{:?}", t.status), "file": t.file, "cwd": t.cwd, "error": t.error, "items": items, "asks": t.asks.len(), "model": t.model_label() })
+            json!({ "id": t.id, "title": t.title(), "status": format!("{:?}", t.status), "file": t.file, "cwd": t.cwd, "error": t.error, "items": items, "asks": t.asks.len(), "model": t.model_label(),
+                "subruns": t.subruns.iter().map(|r| json!({ "agent": r["agent"], "status": r["status"], "transcript": crate::state::hub::AgentRun::of(r, cx).map(|a| a.file) })).collect::<Vec<_>>(),
+                "watch": t.watch, "mode": t.mode.as_str(), "tools": t.tools.values().map(|b| format!("{}:{:?}", b.name, b.status)).collect::<Vec<_>>(), "queue": [t.queue.0, t.queue.1], "todos": t.todos.iter().map(|x| format!("{}:{}", x.status, x.content)).collect::<Vec<_>>(),
+                "ask_kinds": t.asks.iter().map(|a| match &a.kind { crate::state::tab::AskKind::Perm { tool, .. } => format!("perm:{tool}"), crate::state::tab::AskKind::Question(_) => "question".into() }).collect::<Vec<_>>() })
         }).collect();
         return json!({ "ok": true, "view": format!("{:?}", a.view), "active": a.active.as_ref().map(|t| t.read(cx).id.clone()), "tabs": tabs, "sessions": a.sessions.len(), "models": a.models.len(), "toasts": a.toasts.iter().map(|t| t.text.to_string()).collect::<Vec<_>>() });
     } else {
